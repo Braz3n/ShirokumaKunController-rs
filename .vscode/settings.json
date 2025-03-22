@@ -6,14 +6,5 @@
   "[markdown]": {
     "editor.formatOnSave": false
   },
-  "rust-analyzer.check.allTargets": false,
-  "rust-analyzer.check.noDefaultFeatures": true,
-  "rust-analyzer.cargo.noDefaultFeatures": true,
-  "rust-analyzer.showUnlinkedFileNotification": false,
-  // uncomment the target of your chip.
-  "rust-analyzer.cargo.target": "thumbv6m-none-eabi",
-  //"rust-analyzer.cargo.target": "thumbv7m-none-eabi",
-  //"rust-analyzer.cargo.target": "thumbv7em-none-eabi",
-  //"rust-analyzer.cargo.target": "thumbv8m.main-none-eabihf",
-  "rust-analyzer.checkOnSave.allTargets": false
+  "rust-analyzer.cargo.allTargets": false
 }

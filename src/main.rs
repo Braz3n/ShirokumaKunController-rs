@@ -1,24 +1,3 @@
-// //! Template
-
-// #![no_std]
-// #![no_main]
-
-// use defmt::*;
-// use embassy_executor::Spawner;
-// use embassy_rp::i2c::{self, Config};
-// use embassy_time::Timer;
-// use embedded_hal_1::i2c::I2c;
-// use {defmt_rtt as _, panic_probe as _};
-
-// #[embassy_executor::main]
-// async fn main(_spawner: Spawner) {
-//     info!("Hello World!");
-// }
-
-//! This example test the RP Pico W on board LED.
-//!
-//! It does not work with the RP Pico board. See blinky.rs.
-
 #![no_std]
 #![no_main]
 
@@ -51,7 +30,7 @@ async fn main(spawner: Spawner) {
     let scd4x_sda = p.PIN_4;
     let scd4x_scl = p.PIN_5;
     let scd4x_config = embassy_rp::i2c::Config::default();
-    let mut bus = embassy_rp::i2c::I2c::new_async(p.I2C0, scd4x_scl, scd4x_sda, Irqs, scd4x_config);
+    let bus = embassy_rp::i2c::I2c::new_async(p.I2C0, scd4x_scl, scd4x_sda, Irqs, scd4x_config);
 
     Timer::after(Duration::from_millis(100)).await; // Wait for initialization
 
