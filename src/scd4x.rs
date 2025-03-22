@@ -1,6 +1,6 @@
 use embassy_rp::i2c::Async;
 use embassy_rp::peripherals::I2C0;
-enum Scd4xCommand {
+pub enum Scd4xCommand {
     // Basic Commands
     Scd4xCmdStartPeriodicMeasurement = 0x21B1,
     Scd4xCmdReadMeasurement = 0xEC05,
@@ -34,12 +34,16 @@ enum Scd4xCommand {
     Scd4xCmdMeasureSingleShotRhtOnly = 0x2196,
 }
 
-struct Scd4x {
+pub struct Scd4x {
     address: u8,
 }
 
 impl Scd4x {
-    async fn send_command(
+    pub fn init(address: u8) -> Self {
+        Self { address }
+    }
+
+    pub async fn send_command(
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
         command: Scd4xCommand,
@@ -48,7 +52,7 @@ impl Scd4x {
         _ = bus.write_async(self.address, command_bytes).await;
     }
 
-    async fn read_response(
+    pub async fn read_response(
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
         data: &mut [u8; 9],
@@ -56,7 +60,7 @@ impl Scd4x {
         _ = bus.read_async(self.address, data).await;
     }
 
-    async fn read_sequence(
+    pub async fn read_sequence(
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
         command: Scd4xCommand,
