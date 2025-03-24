@@ -8,7 +8,7 @@ use embassy_executor::Spawner;
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::{Async, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0};
-use embassy_time::{Delay, Duration, Instant, TICK_HZ, Ticker, Timer};
+use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use {defmt_rtt as _, panic_probe as _};
 
 mod scd4x;
@@ -31,7 +31,7 @@ async fn main(spawner: Spawner) {
     let scd4x_sda = p.PIN_4;
     let scd4x_scl = p.PIN_5;
     let scd4x_config = embassy_rp::i2c::Config::default();
-    let mut bus = embassy_rp::i2c::I2c::new_async(p.I2C0, scd4x_scl, scd4x_sda, Irqs, scd4x_config);
+    let bus = embassy_rp::i2c::I2c::new_async(p.I2C0, scd4x_scl, scd4x_sda, Irqs, scd4x_config);
 
     Timer::after(Duration::from_millis(100)).await; // Wait for initialization
 
@@ -57,17 +57,8 @@ async fn scd4x_task(mut scd4x_i2c: embassy_rp::i2c::I2c<'static, I2C0, Async>) {
         }
         start_time = Instant::now();
 
-        // Perform the core of the task
-        let mut serial_number: [u8; 9] = [0; 9];
-        scd40
-            .read_sequence(
-                &mut scd4x_i2c,
-                scd4x::Scd4xCommand::Scd4xCmdGetSerialNumber,
-                &mut serial_number,
-            )
-            .await;
-
-        info!("Serial Number: {:?}", serial_number);
+        let serial_number = scd40.get_serial_number(&mut scd4x_i2c).await.unwrap();
+        info!("Serial Number: 0x{:X}", serial_number);
 
         let mut delay = Delay;
         let delay_duration: u32 = 5500;
