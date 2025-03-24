@@ -14,6 +14,8 @@ pub enum Scd4xError {
     ChecksumError,
     #[error("SCD4x Illegal Command During Measurement")]
     CommandDuringMeasurementError,
+    #[error("Unsupported SCD40 Command")]
+    UnsupportedScd40Command,
 }
 
 pub enum Scd4xCommand {
@@ -30,7 +32,7 @@ pub enum Scd4xCommand {
     Scd4xCmdSetAmbientPressure = 0xE000,
 
     // Field Calibration
-    Scd4xCmdPerformForcedRecalibration = 0x362F,
+    Scd4xCmdPerformForcedRecalibration = 0x362F, // Not implemented
     Scd4xCmdSetAutomaticSelfCalibrationEnabled = 0x2416,
     Scd4xCmdGetAutomaticSelfCalibrationEnabled = 0x2313,
 
@@ -48,11 +50,18 @@ pub enum Scd4xCommand {
     // Low Power Single Shot (SCD41 only)
     Scd4xCmdMeasureSingleShot = 0x219D,
     Scd4xCmdMeasureSingleShotRhtOnly = 0x2196,
+    Scd4xCmdPowerDown = 0x36e0, // Not implemented
+    Scd4xCmdWakeUp = 0x36f6,    // Not implemented
+    Scd4xCmdSetAutomaticSelfCalibrationInitialPeriod = 0x2445, // Not implemented
+    Scd4xCmdGetAutomaticSelfCalibrationInitialPeriod = 0x2340, // Not implemented
+    Scd4xCmdSetAutomaticSelfCalibrationStandardPeriod = 0x244e, // Not implemented
+    Scd4xCmdGetAutomaticSelfCalibrationStandardPeriod = 0x234b, // Not implemented
 }
 
 pub struct Scd4x {
     address: u8,
     measurement_active: bool,
+    scd40: bool,
 }
 
 #[derive(Debug, Format)]
@@ -67,6 +76,7 @@ impl Scd4x {
         Self {
             address,
             measurement_active: false,
+            scd40: true, // Assume an SCD40, as opposed to SCD41, etc.
         }
     }
 
@@ -122,14 +132,14 @@ impl Scd4x {
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
         command: Scd4xCommand,
-        data: &mut [u8; 2],
+        data: &[u8; 2],
         delay_ms: u32,
     ) -> Result<(), Scd4xError> {
-        self.send_command(bus, command).await;
-        let mut payload: [u8; 3] = [0; 3];
-        payload[..2].clone_from_slice(data);
+        let mut payload: [u8; 5] = [0; 5];
+        payload[..2].clone_from_slice(&(command as u16).to_be_bytes());
+        payload[2..4].clone_from_slice(data);
 
-        payload[2] = self.calculate_checksum(payload[..2].try_into().unwrap());
+        payload[5] = self.calculate_checksum(payload[..2].try_into().unwrap());
         _ = bus.write_async(self.address, payload).await;
 
         if delay_ms > 0 {
@@ -179,14 +189,136 @@ impl Scd4x {
         crc
     }
 
-    ////////////////////////
-    // Read Only Commands //
-    ////////////////////////
+    ///////////////////////////
+    // Command Only Commands //
+    ///////////////////////////
+    pub async fn start_periodic_measurement(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling scd4x.start_periodic_measurement()");
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        }
+
+        self.send_command(bus, Scd4xCommand::Scd4xCmdStartPeriodicMeasurement)
+            .await;
+
+        Ok(())
+    }
+
+    pub async fn start_low_power_periodic_measurement(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling scd4x.start_low_power_periodic_measurement()");
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        }
+
+        self.send_command(bus, Scd4xCommand::Scd4xCmdStartLowPowerPeriodicMeasurement)
+            .await;
+
+        Ok(())
+    }
+
+    pub async fn stop_periodic_measurement(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling scd4x.stop_periodic_measurement()");
+
+        self.send_command(bus, Scd4xCommand::Scd4xCmdStopPeriodicMeasurement)
+            .await;
+
+        Timer::after_micros(500).await;
+
+        Ok(())
+    }
+
+    pub async fn perform_factory_reset(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling scd4x.perform_factory_reset()");
+
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        }
+
+        self.send_command(bus, Scd4xCommand::Scd4xCmdPerformFactoryReset)
+            .await;
+
+        Timer::after_micros(1200).await;
+
+        Ok(())
+    }
+
+    pub async fn reinit(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling scd4x.reinit()");
+
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        }
+
+        self.send_command(bus, Scd4xCommand::Scd4xCmdReinit).await;
+
+        Timer::after_micros(20).await;
+
+        Ok(())
+    }
+
+    pub async fn measure_single_shot(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling scd4x.measure_single_shot()");
+
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        } else if self.scd40 {
+            return Err(Scd4xError::UnsupportedScd40Command);
+        }
+
+        self.send_command(bus, Scd4xCommand::Scd4xCmdMeasureSingleShot)
+            .await;
+
+        Timer::after_micros(5000).await;
+
+        Ok(())
+    }
+
+    pub async fn measure_single_shot_rht_only(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling scd4x.measure_single_shot_rht_only()");
+
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        } else if self.scd40 {
+            return Err(Scd4xError::UnsupportedScd40Command);
+        }
+
+        self.send_command(bus, Scd4xCommand::Scd4xCmdMeasureSingleShotRhtOnly)
+            .await;
+
+        Timer::after_micros(50).await;
+
+        Ok(())
+    }
+
+    /////////////////////////////
+    // Command + Read Commands //
+    /////////////////////////////
     pub async fn read_measurement(
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
     ) -> Result<Scd4xMeasurement, Scd4xError> {
-        debug!("Calling scd4x.read_measurement");
+        debug!("Calling scd4x.read_measurement()");
         let mut measurement_bytes: [u8; 6] = [0; 6];
 
         self.read_sequence(
@@ -218,7 +350,7 @@ impl Scd4x {
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
     ) -> Result<u16, Scd4xError> {
-        debug!("Calling scd4x.get_temperature_offset");
+        debug!("Calling scd4x.get_temperature_offset()");
         let mut temperature_offset_bytes: [u8; 2] = [0; 2];
 
         if self.measurement_active {
@@ -244,7 +376,7 @@ impl Scd4x {
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
     ) -> Result<u16, Scd4xError> {
-        debug!("Calling scd4x.get_sensor_altitude");
+        debug!("Calling scd4x.get_sensor_altitude()");
         let mut altitude_m_bytes: [u8; 2] = [0; 2];
 
         if self.measurement_active {
@@ -266,11 +398,33 @@ impl Scd4x {
         Ok(altitude_m)
     }
 
+    pub async fn get_ambient_pressure(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+    ) -> Result<u16, Scd4xError> {
+        debug!("Calling scd4x.get_ambient_pressure()");
+        let mut pressure_pa_bytes: [u8; 2] = [0; 2];
+
+        self.read_sequence(
+            bus,
+            Scd4xCommand::Scd4xCmdSetAmbientPressure, // This uses the same opcode for some reason
+            &mut pressure_pa_bytes,
+            1,
+        )
+        .await
+        .unwrap();
+
+        let pressure_pa = 100 * u16::from_be_bytes(pressure_pa_bytes);
+        debug!("Ambient Pressure: {}pa", pressure_pa);
+
+        Ok(pressure_pa)
+    }
+
     pub async fn get_automatic_self_calibration_enabled(
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
     ) -> Result<bool, Scd4xError> {
-        debug!("Calling scd4x.get_automatic_self_calibration_enabled");
+        debug!("Calling scd4x.get_automatic_self_calibration_enabled()");
         let mut enabled_bytes: [u8; 2] = [0; 2];
 
         if self.measurement_active {
@@ -296,7 +450,7 @@ impl Scd4x {
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
     ) -> Result<bool, Scd4xError> {
-        debug!("Calling scd4x.get_data_ready_status");
+        debug!("Calling scd4x.get_data_ready_status()");
         let mut ready_bytes: [u8; 2] = [0; 2];
 
         self.read_sequence(
@@ -318,7 +472,7 @@ impl Scd4x {
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
     ) -> Result<u64, Scd4xError> {
-        debug!("Calling scd4x.get_serial_number");
+        debug!("Calling scd4x.get_serial_number()");
         let mut serial_number_bytes: [u8; 8] = [0; 8]; // 8 bytes for the output as u64
 
         if self.measurement_active {
@@ -344,7 +498,7 @@ impl Scd4x {
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
     ) -> Result<u64, Scd4xError> {
-        debug!("Calling scd4x.perform_self_test");
+        debug!("Calling scd4x.perform_self_test()");
         let mut test_result_bytes: [u8; 8] = [0; 8]; // 8 bytes for the output as u64
 
         if self.measurement_active {
@@ -370,38 +524,84 @@ impl Scd4x {
         Ok(test_result)
     }
 
-    /////////////////////////
-    // Write Only Commands //
-    /////////////////////////
-    pub async fn write(
+    ///////////////////////////////////
+    // Command + Write Only Commands //
+    ///////////////////////////////////
+    pub async fn set_temperature_offset(
         &self,
         bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
-    ) -> Result<Scd4xMeasurement, Scd4xError> {
-        debug!("Calling scd4x.read_measurement");
-        let mut measurement_bytes: [u8; 6] = [0; 6];
+        offset: &u16,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling set_temperature_offset({})", offset);
 
-        self.read_sequence(
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        }
+
+        self.write_payload(
             bus,
-            Scd4xCommand::Scd4xCmdReadMeasurement,
-            &mut measurement_bytes,
+            Scd4xCommand::Scd4xCmdSetTemperatureOffset,
+            &offset.to_be_bytes(),
             1,
         )
         .await
-        .unwrap();
+    }
 
-        let measurement = Scd4xMeasurement {
-            relative_humidity: 100
-                * u16::from_be_bytes(measurement_bytes[4..5].try_into().unwrap())
-                / (1 << 16),
-            temperature_celcius: 175
-                * u16::from_be_bytes(measurement_bytes[2..3].try_into().unwrap())
-                / (1 << 16)
-                - 45,
-            co2_ppm: u16::from_be_bytes(measurement_bytes[0..1].try_into().unwrap()),
-        };
+    pub async fn set_sensor_altitude(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+        altitude: &u16,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling set_sensor_altitude({})", altitude);
 
-        debug!("Measurement: {:#?}", measurement);
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        }
 
-        Ok(measurement)
+        self.write_payload(
+            bus,
+            Scd4xCommand::Scd4xCmdSetSensorAltitude,
+            &altitude.to_be_bytes(),
+            1,
+        )
+        .await
+    }
+
+    pub async fn set_ambient_pressure(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+        pressure_pa: &u16,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling set_ambient_pressure({})", pressure_pa);
+
+        self.write_payload(
+            bus,
+            Scd4xCommand::Scd4xCmdSetAmbientPressure,
+            &pressure_pa.to_be_bytes(),
+            1,
+        )
+        .await
+    }
+
+    pub async fn set_automatic_calibration_enabled(
+        &self,
+        bus: &mut embassy_rp::i2c::I2c<'static, I2C0, Async>,
+        enabled: &bool,
+    ) -> Result<(), Scd4xError> {
+        debug!("Calling set_automatic_calibration_enabled({})", enabled);
+
+        if self.measurement_active {
+            return Err(Scd4xError::CommandDuringMeasurementError);
+        }
+
+        let data: u16 = if *enabled { 1 } else { 0 };
+
+        self.write_payload(
+            bus,
+            Scd4xCommand::Scd4xCmdSetAutomaticSelfCalibrationEnabled,
+            &data.to_be_bytes(),
+            1,
+        )
+        .await
     }
 }

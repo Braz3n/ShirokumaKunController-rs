@@ -55,6 +55,7 @@ dependencies = [
  "portable-atomic",
  "rand",
  "static_cell",
+ "thiserror",
 ]
 
 [[package]]
