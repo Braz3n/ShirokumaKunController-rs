@@ -11,6 +11,7 @@ use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0};
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use {defmt_rtt as _, panic_probe as _};
 
+mod ir_tx;
 mod scd4x;
 
 embassy_rp::bind_interrupts!(struct Irqs {
