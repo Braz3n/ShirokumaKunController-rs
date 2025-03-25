@@ -110,7 +110,7 @@ impl Scd4x {
         self.send_command(bus, command).await;
 
         if delay_ms > 0 {
-            Timer::after_micros(delay_ms.into()).await;
+            Timer::after_millis(delay_ms.into()).await;
         }
 
         // Read in the response and return an error if the checksum failed
@@ -143,7 +143,7 @@ impl Scd4x {
         _ = bus.write_async(self.address, payload).await;
 
         if delay_ms > 0 {
-            Timer::after_micros(delay_ms.into()).await;
+            Timer::after_millis(delay_ms.into()).await;
         }
 
         Ok(())
@@ -231,7 +231,7 @@ impl Scd4x {
         self.send_command(bus, Scd4xCommand::Scd4xCmdStopPeriodicMeasurement)
             .await;
 
-        Timer::after_micros(500).await;
+        Timer::after_millis(500).await;
 
         Ok(())
     }
@@ -249,7 +249,7 @@ impl Scd4x {
         self.send_command(bus, Scd4xCommand::Scd4xCmdPerformFactoryReset)
             .await;
 
-        Timer::after_micros(1200).await;
+        Timer::after_millis(1200).await;
 
         Ok(())
     }
@@ -266,7 +266,7 @@ impl Scd4x {
 
         self.send_command(bus, Scd4xCommand::Scd4xCmdReinit).await;
 
-        Timer::after_micros(20).await;
+        Timer::after_millis(20).await;
 
         Ok(())
     }
@@ -286,7 +286,7 @@ impl Scd4x {
         self.send_command(bus, Scd4xCommand::Scd4xCmdMeasureSingleShot)
             .await;
 
-        Timer::after_micros(5000).await;
+        Timer::after_millis(5000).await;
 
         Ok(())
     }
@@ -306,7 +306,7 @@ impl Scd4x {
         self.send_command(bus, Scd4xCommand::Scd4xCmdMeasureSingleShotRhtOnly)
             .await;
 
-        Timer::after_micros(50).await;
+        Timer::after_millis(50).await;
 
         Ok(())
     }
