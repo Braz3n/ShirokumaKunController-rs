@@ -1,12 +1,10 @@
-use core::default;
-use core::fmt::Debug;
-
-use defmt::{Format, debug};
 use embassy_rp::peripherals::{PIN_16, PWM_SLICE0};
-use embassy_rp::pwm::{Config, Pwm, PwmError, SetDutyCycle};
+use embassy_rp::pwm::{Config, Pwm, SetDutyCycle};
 use embassy_time::Timer;
 
-use thiserror::Error;
+mod ir_cmd_gen;
+
+// use thiserror::Error;
 
 pub struct IrLed {
     pwm: embassy_rp::pwm::Pwm<'static>,
