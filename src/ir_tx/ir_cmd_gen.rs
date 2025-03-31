@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[derive(Clone, Copy)]
 pub enum AirconUpdateType {
     Mode = 0x13,
@@ -28,7 +30,7 @@ pub enum AirconFanSpeed {
     Speed5 = 0x6,
 }
 
-const COMMAND_BYTE_COUNT: usize = 53; // Data including preamble and parity bytes
+pub const COMMAND_BYTE_COUNT: usize = 53; // Data including preamble and parity bytes
 const COMMAND_DATA_COUNT: usize = 25; // Data only count
 const COMMAND_PREAMBLE: [u8; 3] = [0x01, 0x10, 0x00]; // Fixed preamble at start of each packet
 
@@ -39,7 +41,7 @@ pub fn populate_command_buffer(
     temperature: u8,
     timer_on_duration: u16,
     timer_off_duration: u16,
-    command_buffer: &mut [u8; COMMAND_DATA_COUNT],
+    command_buffer: &mut [u8; COMMAND_BYTE_COUNT],
 ) {
     let mut raw_data_buffer: [u8; COMMAND_DATA_COUNT] = [0; COMMAND_DATA_COUNT];
 

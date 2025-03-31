@@ -1,5 +1,4 @@
-use embassy_rp::peripherals::{PIN_16, PWM_SLICE0};
-use embassy_rp::pwm::{Config, Pwm, SetDutyCycle};
+use embassy_rp::pwm::SetDutyCycle;
 use embassy_time::Timer;
 
 mod ir_cmd_gen;
@@ -12,15 +11,10 @@ pub struct IrLed {
 }
 
 impl IrLed {
-    pub async fn ir_init(slice0: PWM_SLICE0, pin16: PIN_16) -> Self {
-        const PWM_IR_WRAP: u16 = ((125e9 / 38e6) as u16) - 1;
-        const PWM_IR_SEND_LEVEL: u16 = ((PWM_IR_WRAP as f32) * 0.3) as u16;
-        let mut pwm_config = Config::default();
-        pwm_config.top = PWM_IR_WRAP;
-        pwm_config.compare_a = PWM_IR_SEND_LEVEL;
-
+    // pub async fn ir_init(slice0: PWM_SLICE0, pin16: PIN_16) -> Self {
+    pub fn ir_init(mut pwm: embassy_rp::pwm::Pwm<'static>) -> Self {
         Self {
-            pwm: Pwm::new_output_a(slice0, pin16, pwm_config),
+            pwm: pwm,
             duty_cycle_percent: 30,
         }
     }
@@ -77,5 +71,39 @@ impl IrLed {
             self.send_pulse().await;
             self.pwm.set_duty_cycle_fully_off().unwrap();
         }
+    }
+
+    pub async fn send_command_buffer(
+        &mut self,
+        command_buffer: &mut [u8; ir_cmd_gen::COMMAND_BYTE_COUNT],
+    ) {
+        for byte in 0..command_buffer.len() {
+            for bit in 0..8 {
+                let symbol = (command_buffer[byte] >> bit) & 0x01 == 1;
+                self.send_symbol(
+                    symbol,
+                    byte == 0 && bit == 0,
+                    byte == command_buffer.len() - 1 && bit == 8 - 1,
+                )
+                .await;
+            }
+        }
+    }
+
+    pub async fn test_fn(&mut self) {
+        let mut command_buffer: [u8; ir_cmd_gen::COMMAND_BYTE_COUNT] =
+            [0; ir_cmd_gen::COMMAND_BYTE_COUNT];
+
+        ir_cmd_gen::populate_command_buffer(
+            ir_cmd_gen::AirconUpdateType::Mode,
+            ir_cmd_gen::AirconMode::Off,
+            ir_cmd_gen::AirconFanSpeed::SpeedAuto,
+            22,
+            0,
+            0,
+            &mut command_buffer,
+        );
+
+        self.send_command_buffer(&mut command_buffer).await;
     }
 }
