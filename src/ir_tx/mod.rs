@@ -1,9 +1,18 @@
+#![allow(dead_code)]
+
 use embassy_rp::pwm::SetDutyCycle;
 use embassy_time::Timer;
 
-mod ir_cmd_gen;
+pub mod ir_cmd_gen;
 
-// use thiserror::Error;
+pub struct AirconState {
+    pub update_type: ir_cmd_gen::AirconUpdateType,
+    pub mode: ir_cmd_gen::AirconMode,
+    pub fan_speed: ir_cmd_gen::AirconFanSpeed,
+    pub target_temp: u8,
+    pub timer_on_duration: u16,
+    pub timer_off_duration: u16,
+}
 
 pub struct IrLed {
     pwm: embassy_rp::pwm::Pwm<'static>,
@@ -12,7 +21,7 @@ pub struct IrLed {
 
 impl IrLed {
     // pub async fn ir_init(slice0: PWM_SLICE0, pin16: PIN_16) -> Self {
-    pub fn ir_init(mut pwm: embassy_rp::pwm::Pwm<'static>) -> Self {
+    pub fn ir_init(pwm: embassy_rp::pwm::Pwm<'static>) -> Self {
         Self {
             pwm: pwm,
             duty_cycle_percent: 30,
@@ -38,12 +47,7 @@ impl IrLed {
         }
     }
 
-    pub async fn send_symbol(
-        &mut self,
-        symbol: bool,
-        new_transmission: bool,
-        end_transmission: bool,
-    ) {
+    async fn send_symbol(&mut self, symbol: bool, new_transmission: bool, end_transmission: bool) {
         if new_transmission {
             // Start of transmission preamble
             self.pwm
@@ -96,9 +100,9 @@ impl IrLed {
 
         ir_cmd_gen::populate_command_buffer(
             ir_cmd_gen::AirconUpdateType::Mode,
-            ir_cmd_gen::AirconMode::Off,
-            ir_cmd_gen::AirconFanSpeed::SpeedAuto,
-            22,
+            ir_cmd_gen::AirconMode::Heating,
+            ir_cmd_gen::AirconFanSpeed::Speed5,
+            24,
             0,
             0,
             &mut command_buffer,
