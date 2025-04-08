@@ -4,14 +4,13 @@
 use cortex_m::prelude::_embedded_hal_blocking_delay_DelayMs;
 use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
 use defmt::*;
-use embassy_executor::{Executor, Spawner};
+use embassy_executor::Spawner;
 
 use embassy_rp;
 use embassy_rp::gpio;
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::Async;
 use embassy_rp::i2c::InterruptHandler as i2cInterruptHandler;
-use embassy_rp::multicore::{Stack, spawn_core1};
 use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0};
 use embassy_rp::pio::InterruptHandler as pioInterruptHander;
 use embassy_rp::{pio, pwm};
@@ -19,16 +18,12 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use ir_tx::IrLed;
-use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 mod ir_tx;
 mod scd4x;
 mod wifi;
 
-static mut CORE1_STACK: Stack<4096> = Stack::new();
-static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
-static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 static IR_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1> = Channel::new();
 
 const WIFI_SSID: &str = "";
@@ -58,24 +53,6 @@ async fn main(spawner: Spawner) {
         p.PIN_29,
         p.DMA_CH0,
     );
-    // spawn_core1(
-    //     p.CORE1,
-    //     unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
-    //     move || {
-    //         let executor1 = EXECUTOR1.init(Executor::new());
-    //         executor1.run(|spawner| {
-    //             unwrap!(spawner.spawn(wifi::wifi_task(
-    //                 spawner,
-    //                 wifi_pwr,
-    //                 wifi_spi,
-    //                 WIFI_SSID,
-    //                 WIFI_PASS,
-    //                 TCP_PORT,
-    //                 &IR_COMMAND_CHANNEL,
-    //             )))
-    //         });
-    //     },
-    // );
 
     unwrap!(spawner.spawn(wifi::wifi_task(
         spawner,
@@ -86,13 +63,12 @@ async fn main(spawner: Spawner) {
         TCP_PORT,
         &IR_COMMAND_CHANNEL,
     )));
-    // return;
 
     // Initialize I2C
     let scd4x_sda = p.PIN_4;
     let scd4x_scl = p.PIN_5;
     let scd4x_config = embassy_rp::i2c::Config::default();
-    let bus = embassy_rp::i2c::I2c::new_async(p.I2C0, scd4x_scl, scd4x_sda, Irqs, scd4x_config);
+    let _bus = embassy_rp::i2c::I2c::new_async(p.I2C0, scd4x_scl, scd4x_sda, Irqs, scd4x_config);
 
     // Initialize IR LED
     let ir_slice = p.PWM_SLICE0;
@@ -106,11 +82,8 @@ async fn main(spawner: Spawner) {
 
     Timer::after(Duration::from_millis(100)).await; // Wait for initialization
 
-    // unwrap!(spawner.spawn(scd4x_task(bus)));
+    // unwrap!(spawner.spawn(scd4x_task(_bus)));
     unwrap!(spawner.spawn(ir_task(ir_pwm, &IR_COMMAND_CHANNEL)));
-
-    // let executor0 = EXECUTOR0.init(Executor::new());
-    // executor0.run(|spawner| unwrap!(spawner.spawn(ir_task(ir_pwm, &IR_COMMAND_CHANNEL))));
 }
 
 #[embassy_executor::task(pool_size = 1)]
@@ -120,9 +93,6 @@ async fn ir_task(
 ) {
     info!("Starting IR Task");
 
-    // const LOOP_PERIOD: Duration = Duration::from_secs(5);
-    // let mut ticker = Ticker::every(LOOP_PERIOD);
-    // let mut start_time = Instant::now();
     let mut ir_led = IrLed::ir_init(ir_pwm);
 
     loop {
@@ -144,22 +114,6 @@ async fn ir_task(
         );
 
         ir_led.send_command_buffer(&mut command_buffer).await;
-
-        // // Ensure the loop is run every LOOP_PERIOD seconds
-        // if start_time + LOOP_PERIOD < Instant::now() {
-        //     let runtime = Instant::now().duration_since(start_time);
-        //     error!(
-        //         "Didn't complete loop in time! Took {:?}ms, expected {:?}ms!",
-        //         runtime.as_millis(),
-        //         LOOP_PERIOD.as_millis()
-        //     );
-        // };
-        // start_time = Instant::now();
-
-        // info!("Loop instance");
-        // ir_led.test_fn().await;
-
-        // ticker.next().await;
     }
 }
 
