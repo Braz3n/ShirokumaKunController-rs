@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum AirconUpdateType {
     Mode = 0x13,
     TimerOn = 0x22,
@@ -11,7 +11,7 @@ pub enum AirconUpdateType {
     FinDirection = 0x81,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum AirconMode {
     Off = 0x0,
     Ventilation = 0x1,
@@ -20,7 +20,7 @@ pub enum AirconMode {
     Heating = 0x6,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum AirconFanSpeed {
     Speed0 = 0x1,
     Speed1 = 0x2,

@@ -24,6 +24,10 @@ use crate::ir_tx;
 
 use thiserror::Error;
 
+const TOPIC_AIRCON_TEMP: &str = "aircon/temp";
+const TOPIC_AIRCON_MODE: &str = "aircon/mode";
+const TOPIC_AIRCON_FAN_SPEED: &str = "aircon/fan_speed";
+
 #[derive(Error, Debug)]
 pub enum MqttError {
     #[error("Unexpected packet over tcp")]
@@ -165,11 +169,14 @@ pub async fn wifi_task(
     .unwrap();
 
     let mut subscribe_topics = Vec::<SubscribeTopic, 5>::new();
-    let x = SubscribeTopic {
-        topic_path: String::try_from("aircon").unwrap(),
-        qos: QoS::AtLeastOnce,
-    };
-    subscribe_topics.push(x).unwrap();
+    let topics = [TOPIC_AIRCON_TEMP, TOPIC_AIRCON_MODE, TOPIC_AIRCON_FAN_SPEED];
+    for topic in topics {
+        let x = SubscribeTopic {
+            topic_path: String::try_from(topic).unwrap(),
+            qos: QoS::AtLeastOnce,
+        };
+        subscribe_topics.push(x).unwrap();
+    }
 
     mqtt_subscribe(
         &mut socket,
@@ -183,6 +190,15 @@ pub async fn wifi_task(
     let mut keep_alive_ticker = Ticker::every(Duration::from_secs(u64::from(
         KEEP_ALIVE_SEC - (f32::from(KEEP_ALIVE_SEC) * 0.2) as u16,
     )));
+
+    let mut aircon_state = ir_tx::AirconState {
+        update_type: ir_tx::ir_cmd_gen::AirconUpdateType::Mode,
+        mode: ir_tx::ir_cmd_gen::AirconMode::Off,
+        fan_speed: ir_tx::ir_cmd_gen::AirconFanSpeed::SpeedAuto,
+        target_temp: 22,
+        timer_on_duration: 0,
+        timer_off_duration: 0,
+    };
 
     loop {
         // https://docs.rs/embassy-futures/latest/embassy_futures/select/fn.select.html
@@ -203,14 +219,33 @@ pub async fn wifi_task(
                     Ok(Some(Packet::Publish(packet))) => {
                         // Response from subscription
                         // Handle packet from user device
+
+                        // Convert u8 slice into String
                         let mut payload_vec = Vec::<u8, 100>::new();
                         payload_vec.extend_from_slice(&packet.payload).unwrap();
-                        // let payload_string: String<100> = String::new();
                         let payload_string: String<100> = String::from_utf8(payload_vec).unwrap();
                         info!(
                             "Received packet from topic {:?} with payload {:?}",
                             packet.topic_name, payload_string
                         );
+
+                        // Convert String into iterator
+                        // let payload_vec: Vec<&str, 2> = payload_string.split(' ').collect();
+                        match packet.topic_name {
+                            TOPIC_AIRCON_TEMP => {
+                                handle_aircon_temp(&mut aircon_state, &payload_string).await
+                            }
+                            TOPIC_AIRCON_MODE => {
+                                handle_aircon_mode(&mut aircon_state, &payload_string).await
+                            }
+                            TOPIC_AIRCON_FAN_SPEED => {
+                                handle_aircon_fan_speed(&mut aircon_state, &payload_string).await
+                            }
+                            _ => {
+                                warn!("Unexpected payload string! {:?}", payload_string);
+                                continue;
+                            }
+                        }
 
                         match packet.qospid {
                             QosPid::AtMostOnce => {
@@ -226,6 +261,8 @@ pub async fn wifi_task(
                                 warn!("Unsupported QoS level!")
                             }
                         }
+
+                        aircon_channel.send(aircon_state).await;
                     }
                     Ok(None) => {
                         info!("Insufficient data to decode MQTT message");
@@ -402,4 +439,48 @@ async fn mqtt_puback(socket: &mut TcpSocket<'_>, pid: Pid) {
     info!("Puback buffer contents: {:?}", puback_buf);
 
     socket.write(&puback_buf).await.unwrap();
+}
+
+async fn handle_aircon_temp(aircon_state: &mut ir_tx::AirconState, arg: &str) {
+    //
+    let target_temp = arg.parse::<u8>().unwrap();
+    info!("Received aircon temp {:?}", target_temp);
+
+    aircon_state.target_temp = target_temp;
+}
+
+async fn handle_aircon_mode(aircon_state: &mut ir_tx::AirconState, arg: &str) {
+    //
+    let mode = match arg {
+        "OFF" => ir_tx::ir_cmd_gen::AirconMode::Off,
+        "HEAT" => ir_tx::ir_cmd_gen::AirconMode::Heating,
+        "COOL" => ir_tx::ir_cmd_gen::AirconMode::Cooling,
+        "FAN" => ir_tx::ir_cmd_gen::AirconMode::Ventilation,
+        _ => {
+            warn!("Unexpected aircon mode {:?}", arg);
+            ir_tx::ir_cmd_gen::AirconMode::Off
+        }
+    };
+
+    info!("Received aircon mode {:?}", mode as u8);
+    aircon_state.mode = mode;
+}
+
+async fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &str) {
+    //
+    let speed = match arg {
+        "1" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed0,
+        "2" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed1,
+        "3" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed2,
+        "4" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed3,
+        "5" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed5,
+        "AUTO" => ir_tx::ir_cmd_gen::AirconFanSpeed::SpeedAuto,
+        _ => {
+            warn!("Unexpected aircon fan speed {:?}", arg);
+            ir_tx::ir_cmd_gen::AirconFanSpeed::SpeedAuto
+        }
+    };
+
+    info!("Received aircon fan speed {:?}", speed as u8);
+    aircon_state.fan_speed = speed;
 }

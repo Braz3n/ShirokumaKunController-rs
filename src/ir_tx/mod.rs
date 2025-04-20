@@ -5,6 +5,7 @@ use embassy_time::Timer;
 
 pub mod ir_cmd_gen;
 
+#[derive(Debug, Copy, Clone)]
 pub struct AirconState {
     pub update_type: ir_cmd_gen::AirconUpdateType,
     pub mode: ir_cmd_gen::AirconMode,
