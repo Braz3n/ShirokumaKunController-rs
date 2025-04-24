@@ -24,6 +24,11 @@ mod ir_tx;
 mod scd4x;
 mod wifi;
 
+use core::ptr::addr_of_mut;
+use embedded_alloc::LlffHeap as Heap;
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
+
 static IR_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1> = Channel::new();
 
 const WIFI_SSID: &str = "";
@@ -37,6 +42,13 @@ embassy_rp::bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    {
+        use core::mem::MaybeUninit;
+        const HEAP_SIZE: usize = 64 * 1024;
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
+    }
+
     let p = embassy_rp::init(Default::default());
 
     // Initialize wifi

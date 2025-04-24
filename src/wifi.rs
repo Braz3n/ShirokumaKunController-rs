@@ -3,19 +3,21 @@ use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
-use embassy_net::dns::DnsSocket;
+use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
-use embassy_net::{Config, Ipv4Address, StackResources};
+use embassy_net::{Config, IpEndpoint, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Ticker, Timer};
-use embedded_tls::{Aes128GcmSha256, TlsConfig, TlsConnection, TlsContext};
+use embedded_tls::{
+    Aes128GcmSha256, Certificate, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
+};
 use heapless::{String, Vec};
-use rand::RngCore;
+use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rustls_pemfile::Item;
 use static_cell::StaticCell;
 
 use mqttrs::*;
@@ -27,6 +29,14 @@ use thiserror::Error;
 const TOPIC_AIRCON_TEMP: &str = "aircon/temp";
 const TOPIC_AIRCON_MODE: &str = "aircon/mode";
 const TOPIC_AIRCON_FAN_SPEED: &str = "aircon/fan_speed";
+
+static CA: &[u8] = include_bytes!("../root-ca.pem");
+
+const BROKER_URL: &str = "";
+const BROKER_PORT: u16 = 8883;
+const BROKER_USER: Option<&str> = Some("");
+const BROKER_PASS: Option<&[u8]> = Some("".as_bytes());
+const BROKER_CLIENT_ID: &str = "";
 
 #[derive(Error, Debug)]
 pub enum MqttError {
@@ -80,34 +90,9 @@ pub async fn wifi_task(
         .await;
 
     let config = Config::dhcpv4(Default::default());
-    // Use static IP configuration instead of DHCP
-    //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
-    //    dns_servers: Vec::new(),
-    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
-    //});
-
-    // let ipv6_addr = Ipv6Address::new(0x2405, 0x6580, 0x3460, 0x1100, 0x23, 0x23, 0x23, 0x23);
-    // let ipv6_prefix_len = 64;
-    // let ipv6_cidr = Ipv6Cidr::new(ipv6_addr, ipv6_prefix_len);
-
-    // let ipv6_gateway = Some(Ipv6Address::new(
-    //     0xfe80, 0, 0, 0, 0x7626, 0xacff, 0xfe9c, 0x7dc8,
-    // ));
-
-    // let mut ipv6_dns_servers = Vec::<Ipv6Address, 3>::new();
-    // let _ = ipv6_dns_servers.push(Ipv6Address::new(0x2404, 0x1a8, 0x7f01, 0xa, 0, 0, 0, 0x3));
-    // let _ = ipv6_dns_servers.push(Ipv6Address::new(0x2404, 0x1a8, 0x7f01, 0xb, 0, 0, 0, 0x3));
-    // let ipv6_config = StaticConfigV6 {
-    //     address: ipv6_cidr,
-    //     gateway: ipv6_gateway,
-    //     dns_servers: ipv6_dns_servers,
-    // };
-    // let config = Config::ipv6_static(ipv6_config);
-
     let seed = rng.next_u64();
 
-    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
     let (stack, runner) = embassy_net::new(
         net_device,
         config,
@@ -139,28 +124,63 @@ pub async fn wifi_task(
     stack.wait_config_up().await;
     info!("Stack is up!");
 
+    let broker_ip = stack.dns_query(BROKER_URL, DnsQueryType::A).await.unwrap();
+    let broker_ip = broker_ip.first().unwrap().clone();
+    info!("Broker IP is {:?}", broker_ip);
+
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    socket
+        .connect(IpEndpoint::new(broker_ip, BROKER_PORT))
+        .await
+        .unwrap();
 
     const KEEP_ALIVE_SEC: u16 = 60 * 10; // ten minutes
     socket.set_timeout(Some(Duration::from_secs(
         (KEEP_ALIVE_SEC as f32 * 1.2) as u64,
     )));
 
-    let remote_endpoint = (embassy_net::Ipv4Address::new(10, 0, 1, 15), 1884);
-    log::info!("connecting to {:?}...", remote_endpoint);
+    let tls_write_buffer = &mut [0; 16640];
+    let tls_read_buffer = &mut [0; 16640];
 
-    if let Err(e) = socket.connect(remote_endpoint).await {
-        warn!("Socket connection error: {:?}", e);
-        return;
+    warn!("Made it this far");
+
+    let Some((Item::X509Certificate(ca), _)) = rustls_pemfile::read_one_from_slice(CA).unwrap()
+    else {
+        self::panic!();
+    };
+    warn!("Made it this far");
+
+    let tls_config = TlsConfig::new()
+        .with_server_name(BROKER_URL)
+        .with_ca(Certificate::X509(ca.as_ref()))
+        .enable_rsa_signatures();
+
+    let mut tls: TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256> =
+        TlsConnection::new(socket, tls_read_buffer, tls_write_buffer);
+
+    let rand_seed = [0; 32]; // TODO: Fucking fix this lol
+    match tls
+        .open(TlsContext::new(
+            &tls_config,
+            UnsecureProvider::new::<Aes128GcmSha256>(StdRng::from_seed(rand_seed)),
+        ))
+        .await
+    {
+        Ok(()) => info!("TLS connection established"),
+        Err(embedded_tls::TlsError::HandshakeAborted(_, e)) => {
+            error!("Handshake error during TLS connection: {:?}", e);
+        }
+        Err(e) => {
+            error!("Error establishing TLS connection: {:?}", e);
+        }
     }
-    info!("TCP Connected!");
 
     let mut tcp_read_buffer = [0; 16384];
     let mut mqtt_buf = [0u8; 1024];
     mqtt_connect(
-        &mut socket,
+        &mut tls,
         &mut mqtt_buf,
         &mut tcp_read_buffer,
         &KEEP_ALIVE_SEC,
@@ -179,7 +199,7 @@ pub async fn wifi_task(
     }
 
     mqtt_subscribe(
-        &mut socket,
+        &mut tls,
         &mut mqtt_buf,
         &mut tcp_read_buffer,
         subscribe_topics,
@@ -204,10 +224,10 @@ pub async fn wifi_task(
         // https://docs.rs/embassy-futures/latest/embassy_futures/select/fn.select.html
         // https://github.com/embassy-rs/embassy/blob/443ffd8b6df67844208ceec58d5443e01b99a159/examples/rp/src/bin/orchestrate_tasks.rs#L23
         // Here we're handling both reception of messages, and maintenance of the keepalive
-        match select(keep_alive_ticker.next(), socket.read(&mut tcp_read_buffer)).await {
+        match select(keep_alive_ticker.next(), tls.read(&mut tcp_read_buffer)).await {
             Either::First(_) => {
                 // Keep alive
-                mqtt_pingreq(&mut socket).await;
+                mqtt_pingreq(&mut tls).await;
             }
             Either::Second(_) => {
                 // Handle any other kind of incoming packet
@@ -253,7 +273,7 @@ pub async fn wifi_task(
                             }
                             QosPid::AtLeastOnce(pid) => {
                                 info!("Expecting at least one response");
-                                mqtt_puback(&mut socket, pid).await;
+                                mqtt_puback(&mut tls, pid).await;
                             }
                             QosPid::ExactlyOnce(_pid) => {
                                 // We either get QoS 0, which requires no response, or QoS 2, which
@@ -277,65 +297,10 @@ pub async fn wifi_task(
             }
         }
     }
-
-    // Tls
-    // let config = TlsConfig::new().with_server_name("example.com");
-    // let tls = TlsConnection::new(socket, &mut tcp_read_buffer, &mut tcp_write_buffer);
-
-    // tls.open(TlsContext::new(
-    //     &config,
-    //     UnsecureProvider::new::<Aes128GcmSha256>(OsRng),
-    // ))
-    // .await
-    // .expect("Error establishing TLS connection");
-
-    // tls.write_all(encoded).await.expect("Error writing packet");
-    // tls.flush().await.expect("Error flushing packet");
-
-    // let sz = tls
-    //     .read(&mut rx_buffer[..])
-    //     .await
-    //     .expect("error reading data");
-
-    // log::info!("Read {} bytes: {:?}", sz, &rx_buffer[..sz]);
-
-    // loop {
-    //     // Halt
-    // }
 }
-
-async fn parse_message(
-    message: &str,
-    channel: &Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1>,
-) {
-    info!("Received message: {}", message);
-
-    // message.split_ascii_whitespace()
-
-    let mode = if message.trim() == "on" {
-        ir_tx::ir_cmd_gen::AirconMode::Heating
-    } else if message.trim() == "of" {
-        ir_tx::ir_cmd_gen::AirconMode::Off
-    } else {
-        return;
-    };
-
-    let state = ir_tx::AirconState {
-        update_type: ir_tx::ir_cmd_gen::AirconUpdateType::Mode,
-        mode: mode,
-        fan_speed: ir_tx::ir_cmd_gen::AirconFanSpeed::Speed5,
-        target_temp: 24,
-        timer_on_duration: 0,
-        timer_off_duration: 0,
-    };
-
-    channel.send(state).await;
-}
-
-async fn mqtt_send_packet(socket: &mut TcpSocket<'_>, packet: Packet<'_>) {}
 
 async fn mqtt_connect(
-    socket: &mut TcpSocket<'_>,
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>,
     mqtt_buffer: &mut [u8; 1024],
     tcp_read_buffer: &mut [u8; 16384],
     keep_alive_sec: &u16,
@@ -343,12 +308,12 @@ async fn mqtt_connect(
     let pkt = Packet::Connect(Connect {
         protocol: Protocol::MQTT311,
         keep_alive: *keep_alive_sec,
-        client_id: "pico_test",
+        client_id: BROKER_CLIENT_ID,
         // We can optionally attempt to reconnect to the last session (saves having to resubscribe, etc.)
         clean_session: true,
         last_will: None,
-        username: None,
-        password: None,
+        username: BROKER_USER,
+        password: BROKER_PASS,
     });
 
     let len = encode_slice(&pkt, mqtt_buffer).unwrap();
@@ -373,8 +338,9 @@ async fn mqtt_connect(
                 return Err(MqttError::ConnectionError);
             }
             Ok(None) => info!("Insufficient data to decode MQTT message"),
-            Err(_) => {
-                warn!("Read error in connection setup");
+            Err(_e) => {
+                info!("Read error in connection setup");
+                // continue;
                 return Err(MqttError::SocketReadError);
             }
             _ => {
@@ -386,7 +352,7 @@ async fn mqtt_connect(
 }
 
 async fn mqtt_subscribe(
-    socket: &mut TcpSocket<'_>,
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>,
     mqtt_buffer: &mut [u8; 1024],
     tcp_read_buffer: &mut [u8; 16384],
     topics: Vec<SubscribeTopic, 5>,
@@ -424,7 +390,7 @@ async fn mqtt_subscribe(
     }
 }
 
-async fn mqtt_pingreq(socket: &mut TcpSocket<'_>) {
+async fn mqtt_pingreq(socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>) {
     // We simply cast this out into the void. Reception is handled elsewhere for now.
     let mut pingreq_buf = [0u8; 2];
     let _ = encode_slice(&Packet::Pingreq, &mut pingreq_buf).unwrap();
@@ -432,7 +398,7 @@ async fn mqtt_pingreq(socket: &mut TcpSocket<'_>) {
     socket.write(&pingreq_buf).await.unwrap();
 }
 
-async fn mqtt_puback(socket: &mut TcpSocket<'_>, pid: Pid) {
+async fn mqtt_puback(socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>, pid: Pid) {
     // We simply cast this out into the void. Reception is handled elsewhere for now.
     let mut puback_buf = [0u8; 4];
     let _ = encode_slice(&Packet::Puback(pid), &mut puback_buf).unwrap();
