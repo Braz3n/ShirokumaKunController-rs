@@ -39,7 +39,6 @@ thiserror = { version = "2", default-features = false }
 heapless = { version = "0.8.0"}
 mqttrs = { version = "0.4", default-features = false, git = "https://github.com/00imvj00/mqttrs.git" }
 embedded-tls = { default-features = false, git = "https://github.com/drogue-iot/embedded-tls", features = ["defmt"] }
-# https://docs.rs/embedded-mbedtls/latest/embedded_mbedtls/
 serde = { version = "1.0.203", default-features = false, features = ["derive"] }
 serde-json-core = "0.5.1"
 

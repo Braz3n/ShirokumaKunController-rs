@@ -31,10 +31,6 @@ static HEAP: Heap = Heap::empty();
 
 static IR_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1> = Channel::new();
 
-const WIFI_SSID: &str = "";
-const WIFI_PASS: &str = "";
-const TCP_PORT: u16 = 1234;
-
 embassy_rp::bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2cInterruptHandler<embassy_rp::peripherals::I2C0>;
     PIO0_IRQ_0 => pioInterruptHander<PIO0>;
@@ -70,9 +66,6 @@ async fn main(spawner: Spawner) {
         spawner,
         wifi_pwr,
         wifi_spi,
-        WIFI_SSID,
-        WIFI_PASS,
-        TCP_PORT,
         &IR_COMMAND_CHANNEL,
     )));
 

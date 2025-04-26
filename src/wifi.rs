@@ -13,7 +13,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Ticker, Timer};
 use embedded_tls::{
-    Aes128GcmSha256, Certificate, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
+    Aes256GcmSha384, Certificate, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
 };
 use heapless::{String, Vec};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
@@ -30,15 +30,19 @@ const TOPIC_AIRCON_TEMP: &str = "aircon/temp";
 const TOPIC_AIRCON_MODE: &str = "aircon/mode";
 const TOPIC_AIRCON_FAN_SPEED: &str = "aircon/fan_speed";
 
-static CA: &[u8] = include_bytes!("../root-ca.pem");
+static CA: &[u8] = include_bytes!("../secrets/root_ca.pem");
 
-const BROKER_URL: &str = "";
+const WIFI_SSID: &str = include_str!("../secrets/wifi_ssid.txt");
+const WIFI_PASS: &[u8] = include_bytes!("../secrets/wifi_pass.txt");
+
+const BROKER_URL: &str = include_str!("../secrets/broker_url.txt");
 const BROKER_PORT: u16 = 8883;
-const BROKER_USER: Option<&str> = Some("");
-const BROKER_PASS: Option<&[u8]> = Some("".as_bytes());
-const BROKER_CLIENT_ID: &str = "";
+const BROKER_USER: Option<&str> = Some(include_str!("../secrets/broker_user.txt"));
+const BROKER_PASS: Option<&[u8]> = Some(include_bytes!("../secrets/broker_pass.txt"));
+const BROKER_CLIENT_ID: &str = "Pico";
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum MqttError {
     #[error("Unexpected packet over tcp")]
     PacketError,
@@ -67,9 +71,6 @@ pub async fn wifi_task(
     spawner: Spawner,
     pwr: Output<'static>,
     wifi_spi: PioSpi<'static, PIO0, 0, DMA_CH0>,
-    wifi_ssid: &'static str,
-    wifi_pass: &'static str,
-    wifi_tcp_port: u16,
     aircon_channel: &'static Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1>,
 ) {
     info!("Starting TCP server");
@@ -103,30 +104,27 @@ pub async fn wifi_task(
     unwrap!(spawner.spawn(net_task(runner)));
 
     loop {
-        match control
-            .join(wifi_ssid, JoinOptions::new(wifi_pass.as_bytes()))
-            .await
-        {
+        match control.join(WIFI_SSID, JoinOptions::new(WIFI_PASS)).await {
             Ok(_) => break,
             Err(err) => {
-                info!("Failed to join network with status={}", err.status);
+                error!("Failed to join network with status={}", err.status);
             }
         }
     }
 
-    info!("Waiting for DHCP...");
+    debug!("Waiting for DHCP...");
     while !stack.is_config_up() {
         Timer::after_millis(100).await
     }
-    info!("DHCP is now up!");
+    debug!("DHCP is now up!");
 
-    info!("waiting for stack to be up...");
+    debug!("waiting for stack to be up...");
     stack.wait_config_up().await;
-    info!("Stack is up!");
+    debug!("Stack is up!");
 
     let broker_ip = stack.dns_query(BROKER_URL, DnsQueryType::A).await.unwrap();
     let broker_ip = broker_ip.first().unwrap().clone();
-    info!("Broker IP is {:?}", broker_ip);
+    debug!("Broker IP is {:?}", broker_ip);
 
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
@@ -144,27 +142,24 @@ pub async fn wifi_task(
     let tls_write_buffer = &mut [0; 16640];
     let tls_read_buffer = &mut [0; 16640];
 
-    warn!("Made it this far");
-
     let Some((Item::X509Certificate(ca), _)) = rustls_pemfile::read_one_from_slice(CA).unwrap()
     else {
         self::panic!();
     };
-    warn!("Made it this far");
 
     let tls_config = TlsConfig::new()
         .with_server_name(BROKER_URL)
         .with_ca(Certificate::X509(ca.as_ref()))
         .enable_rsa_signatures();
 
-    let mut tls: TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256> =
+    let mut tls: TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384> =
         TlsConnection::new(socket, tls_read_buffer, tls_write_buffer);
 
     let rand_seed = [0; 32]; // TODO: Fucking fix this lol
     match tls
         .open(TlsContext::new(
             &tls_config,
-            UnsecureProvider::new::<Aes128GcmSha256>(StdRng::from_seed(rand_seed)),
+            UnsecureProvider::new::<Aes256GcmSha384>(StdRng::from_seed(rand_seed)),
         ))
         .await
     {
@@ -221,8 +216,6 @@ pub async fn wifi_task(
     };
 
     loop {
-        // https://docs.rs/embassy-futures/latest/embassy_futures/select/fn.select.html
-        // https://github.com/embassy-rs/embassy/blob/443ffd8b6df67844208ceec58d5443e01b99a159/examples/rp/src/bin/orchestrate_tasks.rs#L23
         // Here we're handling both reception of messages, and maintenance of the keepalive
         match select(keep_alive_ticker.next(), tls.read(&mut tcp_read_buffer)).await {
             Either::First(_) => {
@@ -234,7 +227,7 @@ pub async fn wifi_task(
                 match decode_slice(&mut tcp_read_buffer) {
                     Ok(Some(Packet::Pingresp)) => {
                         // Ping response
-                        info!("Received a pingresp!");
+                        debug!("Received a pingresp!");
                     }
                     Ok(Some(Packet::Publish(packet))) => {
                         // Response from subscription
@@ -244,7 +237,7 @@ pub async fn wifi_task(
                         let mut payload_vec = Vec::<u8, 100>::new();
                         payload_vec.extend_from_slice(&packet.payload).unwrap();
                         let payload_string: String<100> = String::from_utf8(payload_vec).unwrap();
-                        info!(
+                        debug!(
                             "Received packet from topic {:?} with payload {:?}",
                             packet.topic_name, payload_string
                         );
@@ -272,7 +265,7 @@ pub async fn wifi_task(
                                 // No ack necessary. Do nothing.
                             }
                             QosPid::AtLeastOnce(pid) => {
-                                info!("Expecting at least one response");
+                                debug!("Expecting at least one response");
                                 mqtt_puback(&mut tls, pid).await;
                             }
                             QosPid::ExactlyOnce(_pid) => {
@@ -285,10 +278,10 @@ pub async fn wifi_task(
                         aircon_channel.send(aircon_state).await;
                     }
                     Ok(None) => {
-                        info!("Insufficient data to decode MQTT message");
+                        debug!("Insufficient data to decode MQTT message");
                     }
                     Err(_error) => {
-                        warn!("Failed to decode MQTT message");
+                        error!("Failed to decode MQTT message");
                     }
                     _ => {
                         // Unhandled packet types
@@ -300,7 +293,7 @@ pub async fn wifi_task(
 }
 
 async fn mqtt_connect(
-    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>,
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     mqtt_buffer: &mut [u8; 1024],
     tcp_read_buffer: &mut [u8; 16384],
     keep_alive_sec: &u16,
@@ -317,9 +310,7 @@ async fn mqtt_connect(
     });
 
     let len = encode_slice(&pkt, mqtt_buffer).unwrap();
-    if let Err(e) = socket.write(&(mqtt_buffer[..len])).await {
-        warn!("Write error in connection setup {:?}", e);
-    }
+    write_with_flush(socket, &mqtt_buffer[..len]).await;
 
     // Receive the connack packet
     loop {
@@ -330,21 +321,21 @@ async fn mqtt_connect(
                 session_present: false,
                 code: ConnectReturnCode::Accepted,
             }))) => {
-                info!("Successfully connected");
+                debug!("Successfully connected");
                 return Ok(());
             }
             Ok(Some(Packet::Connack(_resp))) => {
-                warn!("Unsuccessful connection attempt");
+                error!("Unsuccessful connection attempt");
                 return Err(MqttError::ConnectionError);
             }
             Ok(None) => info!("Insufficient data to decode MQTT message"),
             Err(_e) => {
-                info!("Read error in connection setup");
+                error!("Read error in connection setup");
                 // continue;
                 return Err(MqttError::SocketReadError);
             }
             _ => {
-                warn!("Received unexpected packet over TCP");
+                error!("Received unexpected packet over TCP");
                 return Err(MqttError::PacketError);
             }
         }
@@ -352,7 +343,7 @@ async fn mqtt_connect(
 }
 
 async fn mqtt_subscribe(
-    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>,
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     mqtt_buffer: &mut [u8; 1024],
     tcp_read_buffer: &mut [u8; 16384],
     topics: Vec<SubscribeTopic, 5>,
@@ -361,10 +352,7 @@ async fn mqtt_subscribe(
     let pkt = Packet::Subscribe(Subscribe { pid, topics });
 
     let len = encode_slice(&pkt, mqtt_buffer).unwrap();
-    if let Err(e) = socket.write(&mqtt_buffer[..len]).await {
-        warn!("Write error in connection setup {:?}", e);
-        return Err(MqttError::SocketWriteError);
-    }
+    write_with_flush(socket, &mqtt_buffer[..len]).await;
 
     loop {
         socket.read(tcp_read_buffer).await.unwrap();
@@ -374,43 +362,43 @@ async fn mqtt_subscribe(
                 pid: _,
                 return_codes,
             }))) => {
-                info!("Successfully subscribed");
+                debug!("Successfully subscribed");
                 return Ok(return_codes);
             }
             Ok(None) => info!("Insufficient data to decode MQTT message"),
             Err(_) => {
-                warn!("Read error in connection setup");
+                error!("Read error in connection setup");
                 return Err(MqttError::SocketReadError);
             }
             _ => {
-                warn!("Received unexpected packet over TCP");
+                error!("Received unexpected packet over TCP");
                 return Err(MqttError::PacketError);
             }
         }
     }
 }
 
-async fn mqtt_pingreq(socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>) {
+async fn mqtt_pingreq(socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>) {
     // We simply cast this out into the void. Reception is handled elsewhere for now.
     let mut pingreq_buf = [0u8; 2];
     let _ = encode_slice(&Packet::Pingreq, &mut pingreq_buf).unwrap();
 
-    socket.write(&pingreq_buf).await.unwrap();
+    write_with_flush(socket, &pingreq_buf).await;
 }
 
-async fn mqtt_puback(socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes128GcmSha256>, pid: Pid) {
+async fn mqtt_puback(socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>, pid: Pid) {
     // We simply cast this out into the void. Reception is handled elsewhere for now.
     let mut puback_buf = [0u8; 4];
     let _ = encode_slice(&Packet::Puback(pid), &mut puback_buf).unwrap();
-    info!("Puback buffer contents: {:?}", puback_buf);
+    debug!("Puback buffer contents: {:?}", puback_buf);
 
-    socket.write(&puback_buf).await.unwrap();
+    write_with_flush(socket, &puback_buf).await;
 }
 
 async fn handle_aircon_temp(aircon_state: &mut ir_tx::AirconState, arg: &str) {
     //
     let target_temp = arg.parse::<u8>().unwrap();
-    info!("Received aircon temp {:?}", target_temp);
+    debug!("Received aircon temp {:?}", target_temp);
 
     aircon_state.target_temp = target_temp;
 }
@@ -423,12 +411,12 @@ async fn handle_aircon_mode(aircon_state: &mut ir_tx::AirconState, arg: &str) {
         "COOL" => ir_tx::ir_cmd_gen::AirconMode::Cooling,
         "FAN" => ir_tx::ir_cmd_gen::AirconMode::Ventilation,
         _ => {
-            warn!("Unexpected aircon mode {:?}", arg);
+            error!("Unexpected aircon mode {:?}", arg);
             ir_tx::ir_cmd_gen::AirconMode::Off
         }
     };
 
-    info!("Received aircon mode {:?}", mode as u8);
+    debug!("Received aircon mode {:?}", mode as u8);
     aircon_state.mode = mode;
 }
 
@@ -442,11 +430,19 @@ async fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &st
         "5" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed5,
         "AUTO" => ir_tx::ir_cmd_gen::AirconFanSpeed::SpeedAuto,
         _ => {
-            warn!("Unexpected aircon fan speed {:?}", arg);
+            error!("Unexpected aircon fan speed {:?}", arg);
             ir_tx::ir_cmd_gen::AirconFanSpeed::SpeedAuto
         }
     };
 
-    info!("Received aircon fan speed {:?}", speed as u8);
+    debug!("Received aircon fan speed {:?}", speed as u8);
     aircon_state.fan_speed = speed;
+}
+
+async fn write_with_flush(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    buf: &[u8],
+) {
+    socket.write(&(buf)).await.expect("Error writing TLS data");
+    socket.flush().await.expect("Error flushing TLS data");
 }
