@@ -6,7 +6,7 @@ authors = ["zane"]
 resolver = "2"
 
 [dependencies]
-embassy-rp = { version = "0.4.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-rp = { version = "0.4.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa", "binary-info"] }
 embassy-sync = { version = "0.6.2", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", git = "https://github.com/embassy-rs/embassy.git", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
 embassy-time = { version = "0.4.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "defmt-timestamp-uptime"] }
