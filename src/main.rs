@@ -11,8 +11,10 @@ use embassy_rp::gpio;
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::Async;
 use embassy_rp::i2c::InterruptHandler as i2cInterruptHandler;
+use embassy_rp::peripherals::TRNG;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0};
 use embassy_rp::pio::InterruptHandler as pioInterruptHander;
+use embassy_rp::trng::Trng;
 use embassy_rp::{pio, pwm};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -34,6 +36,7 @@ static IR_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ir_tx::AirconState, 
 embassy_rp::bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2cInterruptHandler<embassy_rp::peripherals::I2C0>;
     PIO0_IRQ_0 => pioInterruptHander<PIO0>;
+    TRNG_IRQ => embassy_rp::trng::InterruptHandler<TRNG>;
 });
 
 #[embassy_executor::main]
@@ -46,6 +49,12 @@ async fn main(spawner: Spawner) {
     }
 
     let p = embassy_rp::init(Default::default());
+
+    // Initialize trng
+    let mut trng = Trng::new(p.TRNG, Irqs, embassy_rp::trng::Config::default());
+
+    let mut tls_seed = [0u8; 32];
+    trng.fill_bytes(&mut tls_seed).await;
 
     // Initialize wifi
     let mut wifi_pio = pio::Pio::new(p.PIO0, Irqs);
@@ -67,6 +76,7 @@ async fn main(spawner: Spawner) {
         wifi_pwr,
         wifi_spi,
         &IR_COMMAND_CHANNEL,
+        tls_seed,
     )));
 
     // Initialize I2C

@@ -72,6 +72,7 @@ pub async fn wifi_task(
     pwr: Output<'static>,
     wifi_spi: PioSpi<'static, PIO0, 0, DMA_CH0>,
     aircon_channel: &'static Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1>,
+    tls_seed: [u8; 32],
 ) {
     info!("Starting TCP server");
 
@@ -155,11 +156,10 @@ pub async fn wifi_task(
     let mut tls: TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384> =
         TlsConnection::new(socket, tls_read_buffer, tls_write_buffer);
 
-    let rand_seed = [0; 32]; // TODO: Fucking fix this lol
     match tls
         .open(TlsContext::new(
             &tls_config,
-            UnsecureProvider::new::<Aes256GcmSha384>(StdRng::from_seed(rand_seed)),
+            UnsecureProvider::new::<Aes256GcmSha384>(StdRng::from_seed(tls_seed)),
         ))
         .await
     {
