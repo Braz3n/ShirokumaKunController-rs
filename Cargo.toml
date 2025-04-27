@@ -31,16 +31,12 @@ futures = { version = "0.3.17", default-features = false, features = ["async-awa
 
 static_cell = { default-features = false, version = "2.1" }
 portable-atomic = { version = "1.5", features = ["critical-section"] }
-log = "0.4"
 rand = { version = "0.8.4", default-features = false, features = ["std_rng"] }
-embedded-sdmmc = "0.7.0"
 
 thiserror = { version = "2", default-features = false }
 heapless = { version = "0.8.0"}
 mqttrs = { version = "0.4", default-features = false, git = "https://github.com/00imvj00/mqttrs.git" }
 embedded-tls = { default-features = false, git = "https://github.com/drogue-iot/embedded-tls", features = ["defmt"] }
-serde = { version = "1.0.203", default-features = false, features = ["derive"] }
-serde-json-core = "0.5.1"
 
 [profile.release]
 debug = 2
