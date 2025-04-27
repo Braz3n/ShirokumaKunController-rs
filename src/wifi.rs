@@ -163,7 +163,7 @@ pub async fn wifi_task(
         ))
         .await
     {
-        Ok(()) => info!("TLS connection established"),
+        Ok(()) => debug!("TLS connection established"),
         Err(embedded_tls::TlsError::HandshakeAborted(_, e)) => {
             error!("Handshake error during TLS connection: {:?}", e);
         }
