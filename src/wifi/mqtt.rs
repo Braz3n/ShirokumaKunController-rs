@@ -25,7 +25,6 @@ pub enum MqttError {
 pub(super) async fn mqtt_connect(
     socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     mqtt_buffer: &mut [u8; 1024],
-    tcp_read_buffer: &mut [u8; 16384],
     keep_alive_sec: &u16,
 ) -> Result<(), MqttError> {
     let pkt = Packet::Connect(Connect {
@@ -38,15 +37,15 @@ pub(super) async fn mqtt_connect(
         username: BROKER_USER,
         password: BROKER_PASS,
     });
-
+    let mut tcp_read_buffer = [0; 4];
     let len = encode_slice(&pkt, mqtt_buffer).unwrap();
     write_with_flush(socket, &mqtt_buffer[..len]).await;
 
     // Receive the connack packet
     loop {
-        socket.read(tcp_read_buffer).await.unwrap();
+        socket.read(&mut tcp_read_buffer).await.unwrap();
 
-        match decode_slice(tcp_read_buffer) {
+        match decode_slice(&tcp_read_buffer) {
             Ok(Some(Packet::Connack(Connack {
                 session_present: false,
                 code: ConnectReturnCode::Accepted,
@@ -75,7 +74,6 @@ pub(super) async fn mqtt_connect(
 pub(super) async fn mqtt_subscribe(
     socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     mqtt_buffer: &mut [u8; 1024],
-    tcp_read_buffer: &mut [u8; 16384],
     topics: Vec<SubscribeTopic, 5>,
 ) -> Result<Vec<SubscribeReturnCodes, 5>, MqttError> {
     let pid = Pid::new();
@@ -84,10 +82,11 @@ pub(super) async fn mqtt_subscribe(
     let len = encode_slice(&pkt, mqtt_buffer).unwrap();
     write_with_flush(socket, &mqtt_buffer[..len]).await;
 
+    let mut tcp_read_buffer = [0; 64];
     loop {
-        socket.read(tcp_read_buffer).await.unwrap();
+        socket.read(&mut tcp_read_buffer).await.unwrap();
 
-        match decode_slice(tcp_read_buffer) {
+        match decode_slice(&tcp_read_buffer) {
             Ok(Some(Packet::Suback(Suback {
                 pid: _,
                 return_codes,

@@ -59,13 +59,14 @@ async fn main(spawner: Spawner) {
     // Initialize wifi
     let mut wifi_pio = pio::Pio::new(p.PIO0, Irqs);
     let wifi_pwr = Output::new(p.PIN_23, gpio::Level::Low);
+    let wifi_cs = Output::new(p.PIN_25, gpio::Level::High);
 
     let wifi_spi: PioSpi<'_, PIO0, 0, DMA_CH0> = PioSpi::new(
         &mut wifi_pio.common,
         wifi_pio.sm0,
         DEFAULT_CLOCK_DIVIDER,
         wifi_pio.irq0,
-        Output::new(p.PIN_25, gpio::Level::High),
+        wifi_cs,
         p.PIN_24,
         p.PIN_29,
         p.DMA_CH0,
