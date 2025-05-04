@@ -56,8 +56,8 @@ pub fn populate_command_buffer(
     raw_data_buffer[8] = ((timer_off_duration >> 4) & 0xFF) as u8; // Byte8[7:0] Timer Off Minutes high byte
     raw_data_buffer[9] = (timer_on_duration & 0xFF) as u8; // Byte9[7:0] Timer On Minutes low byte
     raw_data_buffer[10] = ((timer_on_duration >> 8) & 0xF) as u8; // Byte10[3:0] Timer On Minutes high nibble
-    raw_data_buffer[10] |= (((timer_off_duration > 0) as u8) << 4) as u8; // Timer Off Flag: Byte10[4]
-    raw_data_buffer[10] |= (((timer_on_duration > 0) as u8) << 5) as u8; // Timer On Flag: Byte10[5]
+    raw_data_buffer[10] |= (u8::from(timer_off_duration > 0)) << 4; // Timer Off Flag: Byte10[4]
+    raw_data_buffer[10] |= (u8::from(timer_on_duration > 0)) << 5; // Timer On Flag: Byte10[5]
 
     raw_data_buffer[11] = if matches!(mode, AirconMode::Off) {
         ((fan_speed as u8) << 4) | (AirconMode::Heating as u8)

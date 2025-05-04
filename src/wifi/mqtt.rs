@@ -1,9 +1,12 @@
-use defmt::*;
+use defmt::{debug, error, info};
 use embassy_net::tcp::TcpSocket;
 use embedded_tls::{Aes256GcmSha384, TlsConnection};
 use heapless::Vec;
 
-use mqttrs::*;
+use mqttrs::{
+    Connack, Connect, ConnectReturnCode, Packet, Pid, Protocol, Publish, QosPid, Suback, Subscribe,
+    SubscribeReturnCodes, SubscribeTopic, decode_slice, encode_slice,
+};
 
 use crate::wifi::{BROKER_CLIENT_ID, BROKER_PASS, BROKER_USER};
 
@@ -13,13 +16,13 @@ use thiserror::Error;
 #[allow(dead_code)]
 pub enum MqttError {
     #[error("Unexpected packet over tcp")]
-    PacketError,
+    Packet,
     #[error("Connection Failed")]
-    ConnectionError,
+    Connection,
     #[error("Socket Read Error")]
-    SocketReadError,
+    SocketRead,
     #[error("Socket Write Error")]
-    SocketWriteError,
+    SocketWrite,
 }
 
 pub(super) async fn mqtt_connect(
@@ -55,17 +58,17 @@ pub(super) async fn mqtt_connect(
             }
             Ok(Some(Packet::Connack(_resp))) => {
                 error!("Unsuccessful connection attempt");
-                return Err(MqttError::ConnectionError);
+                return Err(MqttError::Connection);
             }
             Ok(None) => info!("Insufficient data to decode MQTT message"),
             Err(_e) => {
                 error!("Read error in connection setup");
                 // continue;
-                return Err(MqttError::SocketReadError);
+                return Err(MqttError::SocketRead);
             }
             _ => {
                 error!("Received unexpected packet over TCP");
-                return Err(MqttError::PacketError);
+                return Err(MqttError::Packet);
             }
         }
     }
@@ -97,11 +100,11 @@ pub(super) async fn mqtt_subscribe(
             Ok(None) => info!("Insufficient data to decode MQTT message"),
             Err(_) => {
                 error!("Read error in connection setup");
-                return Err(MqttError::SocketReadError);
+                return Err(MqttError::SocketRead);
             }
             _ => {
                 error!("Received unexpected packet over TCP");
-                return Err(MqttError::PacketError);
+                return Err(MqttError::Packet);
             }
         }
     }
@@ -127,10 +130,32 @@ pub(super) async fn mqtt_puback(
     write_with_flush(socket, &puback_buf).await;
 }
 
+pub(super) async fn mqtt_publish(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    topic: &str,
+    retain: bool,
+    payload: &str,
+) {
+    let mut publish_buf = [0u8; 256];
+    let len = encode_slice(
+        &Packet::Publish(Publish {
+            dup: false,
+            qospid: QosPid::AtMostOnce,
+            retain,
+            topic_name: topic,
+            payload: payload.as_bytes(),
+        }),
+        &mut publish_buf,
+    )
+    .unwrap();
+
+    write_with_flush(socket, &publish_buf[..len]).await;
+}
+
 async fn write_with_flush(
     socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     buf: &[u8],
 ) {
-    socket.write(&(buf)).await.expect("Error writing TLS data");
+    socket.write(buf).await.expect("Error writing TLS data");
     socket.flush().await.expect("Error flushing TLS data");
 }

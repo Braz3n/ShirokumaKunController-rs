@@ -3,10 +3,10 @@
 
 use cortex_m::prelude::_embedded_hal_blocking_delay_DelayMs;
 use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
-use defmt::*;
+use defmt::{error, info, unwrap};
 use embassy_executor::Spawner;
 
-use embassy_rp;
+use embassy_rp::clocks::*;
 use embassy_rp::gpio;
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::Async;
@@ -20,6 +20,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use ir_tx::IrLed;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 mod ir_tx;
@@ -31,6 +32,8 @@ use embedded_alloc::LlffHeap as Heap;
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
+static PWM_CLOCK_FREQUENCY: u64 = 125_000_000_000;
+static IR_SIGNAL_FREQUENCY: u64 = 38_000_000;
 static IR_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1> = Channel::new();
 
 embassy_rp::bind_interrupts!(struct Irqs {
@@ -49,6 +52,10 @@ async fn main(spawner: Spawner) {
     }
 
     let p = embassy_rp::init(Default::default());
+
+    // Initialize watchdog
+    static WATCHDOG: StaticCell<embassy_rp::watchdog::Watchdog> = StaticCell::new();
+    let watchdog = WATCHDOG.init(embassy_rp::watchdog::Watchdog::new(p.WATCHDOG));
 
     // Initialize trng
     let mut trng = Trng::new(p.TRNG, Irqs, embassy_rp::trng::Config::default());
@@ -78,6 +85,7 @@ async fn main(spawner: Spawner) {
         wifi_spi,
         &IR_COMMAND_CHANNEL,
         tls_seed,
+        watchdog,
     )));
 
     // Initialize I2C
@@ -90,7 +98,7 @@ async fn main(spawner: Spawner) {
     let ir_slice = p.PWM_SLICE0;
     let ir_pin = p.PIN_16;
     let mut ir_config = pwm::Config::default();
-    ir_config.top = ((125e9 / 38e6) as u16) - 1; // System Freq / 38kHz
+    ir_config.top = u16::try_from(PWM_CLOCK_FREQUENCY / IR_SIGNAL_FREQUENCY).unwrap() - 1; // System Freq / 38kHz
     let ir_pwm = pwm::Pwm::new_output_a(ir_slice, ir_pin, ir_config);
 
     // Initialize IR Input (for logic analyzer verification only)

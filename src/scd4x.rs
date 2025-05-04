@@ -20,42 +20,42 @@ pub enum Scd4xError {
 
 pub enum Scd4xCommand {
     // Basic Commands
-    Scd4xCmdStartPeriodicMeasurement = 0x21B1,
-    Scd4xCmdReadMeasurement = 0xEC05,
-    Scd4xCmdStopPeriodicMeasurement = 0x3F86,
+    StartPeriodicMeasurement = 0x21B1,
+    ReadMeasurement = 0xEC05,
+    StopPeriodicMeasurement = 0x3F86,
 
     // On-chip Output Signal Compensation
-    Scd4xCmdSetTemperatureOffset = 0x241D,
-    Scd4xCmdGetTemperatureOffset = 0x2318,
-    Scd4xCmdSetSensorAltitude = 0x2427,
-    Scd4xCmdGetSensorAltitude = 0x2322,
-    Scd4xCmdSetAmbientPressure = 0xE000,
+    SetTemperatureOffset = 0x241D,
+    GetTemperatureOffset = 0x2318,
+    SetSensorAltitude = 0x2427,
+    GetSensorAltitude = 0x2322,
+    SetAmbientPressure = 0xE000,
 
     // Field Calibration
-    Scd4xCmdPerformForcedRecalibration = 0x362F, // Not implemented
-    Scd4xCmdSetAutomaticSelfCalibrationEnabled = 0x2416,
-    Scd4xCmdGetAutomaticSelfCalibrationEnabled = 0x2313,
+    PerformForcedRecalibration = 0x362F, // Not implemented
+    SetAutomaticSelfCalibrationEnabled = 0x2416,
+    GetAutomaticSelfCalibrationEnabled = 0x2313,
 
     // Low Power
-    Scd4xCmdStartLowPowerPeriodicMeasurement = 0x21AC,
-    Scd4xCmdGetDataReadyStatus = 0xE4B8,
+    StartLowPowerPeriodicMeasurement = 0x21AC,
+    GetDataReadyStatus = 0xE4B8,
 
     // Advanced Features
-    Scd4xCmdPersistSettings = 0x3615,
-    Scd4xCmdGetSerialNumber = 0x3682,
-    Scd4xCmdPerformSelfTest = 0x3639,
-    Scd4xCmdPerformFactoryReset = 0x3632,
-    Scd4xCmdReinit = 0x3646,
+    PersistSettings = 0x3615,
+    GetSerialNumber = 0x3682,
+    PerformSelfTest = 0x3639,
+    PerformFactoryReset = 0x3632,
+    Reinit = 0x3646,
 
     // Low Power Single Shot (SCD41 only)
-    Scd4xCmdMeasureSingleShot = 0x219D,
-    Scd4xCmdMeasureSingleShotRhtOnly = 0x2196,
-    Scd4xCmdPowerDown = 0x36e0, // Not implemented
-    Scd4xCmdWakeUp = 0x36f6,    // Not implemented
-    Scd4xCmdSetAutomaticSelfCalibrationInitialPeriod = 0x2445, // Not implemented
-    Scd4xCmdGetAutomaticSelfCalibrationInitialPeriod = 0x2340, // Not implemented
-    Scd4xCmdSetAutomaticSelfCalibrationStandardPeriod = 0x244e, // Not implemented
-    Scd4xCmdGetAutomaticSelfCalibrationStandardPeriod = 0x234b, // Not implemented
+    MeasureSingleShot = 0x219D,
+    MeasureSingleShotRhtOnly = 0x2196,
+    PowerDown = 0x36e0,                                 // Not implemented
+    WakeUp = 0x36f6,                                    // Not implemented
+    SetAutomaticSelfCalibrationInitialPeriod = 0x2445,  // Not implemented
+    GetAutomaticSelfCalibrationInitialPeriod = 0x2340,  // Not implemented
+    SetAutomaticSelfCalibrationStandardPeriod = 0x244e, // Not implemented
+    GetAutomaticSelfCalibrationStandardPeriod = 0x234b, // Not implemented
 }
 
 pub struct Scd4x {
@@ -120,9 +120,9 @@ impl Scd4x {
         };
 
         // Throw away the checksum bytes and return the data of interest
-        for i in 0..data.len() {
+        for (i, item) in data.iter_mut().enumerate() {
             let raw_data_idx = i % 2 + (i / 2) * 3;
-            data[i] = raw_data[raw_data_idx];
+            *item = raw_data[raw_data_idx];
         }
 
         Ok(())
@@ -139,7 +139,7 @@ impl Scd4x {
         payload[..2].clone_from_slice(&(command as u16).to_be_bytes());
         payload[2..4].clone_from_slice(data);
 
-        payload[5] = self.calculate_checksum(payload[..2].try_into().unwrap());
+        payload[4] = self.calculate_checksum(payload[..2].try_into().unwrap());
         _ = bus.write_async(self.address, payload).await;
 
         if delay_ms > 0 {
@@ -181,7 +181,7 @@ impl Scd4x {
                 if crc & 0x80 > 0 {
                     crc = (crc << 1) ^ CRC8_POLYNOMIAL;
                 } else {
-                    crc = crc << 1;
+                    crc <<= 1;
                 }
             }
         }
@@ -201,7 +201,7 @@ impl Scd4x {
             return Err(Scd4xError::CommandDuringMeasurementError);
         }
 
-        self.send_command(bus, Scd4xCommand::Scd4xCmdStartPeriodicMeasurement)
+        self.send_command(bus, Scd4xCommand::StartPeriodicMeasurement)
             .await;
 
         Ok(())
@@ -216,7 +216,7 @@ impl Scd4x {
             return Err(Scd4xError::CommandDuringMeasurementError);
         }
 
-        self.send_command(bus, Scd4xCommand::Scd4xCmdStartLowPowerPeriodicMeasurement)
+        self.send_command(bus, Scd4xCommand::StartLowPowerPeriodicMeasurement)
             .await;
 
         Ok(())
@@ -228,7 +228,7 @@ impl Scd4x {
     ) -> Result<(), Scd4xError> {
         debug!("Calling scd4x.stop_periodic_measurement()");
 
-        self.send_command(bus, Scd4xCommand::Scd4xCmdStopPeriodicMeasurement)
+        self.send_command(bus, Scd4xCommand::StopPeriodicMeasurement)
             .await;
 
         Timer::after_millis(500).await;
@@ -246,7 +246,7 @@ impl Scd4x {
             return Err(Scd4xError::CommandDuringMeasurementError);
         }
 
-        self.send_command(bus, Scd4xCommand::Scd4xCmdPerformFactoryReset)
+        self.send_command(bus, Scd4xCommand::PerformFactoryReset)
             .await;
 
         Timer::after_millis(1200).await;
@@ -264,7 +264,7 @@ impl Scd4x {
             return Err(Scd4xError::CommandDuringMeasurementError);
         }
 
-        self.send_command(bus, Scd4xCommand::Scd4xCmdReinit).await;
+        self.send_command(bus, Scd4xCommand::Reinit).await;
 
         Timer::after_millis(20).await;
 
@@ -283,7 +283,7 @@ impl Scd4x {
             return Err(Scd4xError::UnsupportedScd40Command);
         }
 
-        self.send_command(bus, Scd4xCommand::Scd4xCmdMeasureSingleShot)
+        self.send_command(bus, Scd4xCommand::MeasureSingleShot)
             .await;
 
         Timer::after_millis(5000).await;
@@ -303,7 +303,7 @@ impl Scd4x {
             return Err(Scd4xError::UnsupportedScd40Command);
         }
 
-        self.send_command(bus, Scd4xCommand::Scd4xCmdMeasureSingleShotRhtOnly)
+        self.send_command(bus, Scd4xCommand::MeasureSingleShotRhtOnly)
             .await;
 
         Timer::after_millis(50).await;
@@ -323,7 +323,7 @@ impl Scd4x {
 
         self.read_sequence(
             bus,
-            Scd4xCommand::Scd4xCmdReadMeasurement,
+            Scd4xCommand::ReadMeasurement,
             &mut measurement_bytes,
             1,
         )
@@ -359,7 +359,7 @@ impl Scd4x {
 
         self.read_sequence(
             bus,
-            Scd4xCommand::Scd4xCmdGetTemperatureOffset,
+            Scd4xCommand::GetTemperatureOffset,
             &mut temperature_offset_bytes,
             1,
         )
@@ -385,7 +385,7 @@ impl Scd4x {
 
         self.read_sequence(
             bus,
-            Scd4xCommand::Scd4xCmdGetSensorAltitude,
+            Scd4xCommand::GetSensorAltitude,
             &mut altitude_m_bytes,
             1,
         )
@@ -407,7 +407,7 @@ impl Scd4x {
 
         self.read_sequence(
             bus,
-            Scd4xCommand::Scd4xCmdSetAmbientPressure, // This uses the same opcode for some reason
+            Scd4xCommand::SetAmbientPressure, // This uses the same opcode for some reason
             &mut pressure_pa_bytes,
             1,
         )
@@ -433,7 +433,7 @@ impl Scd4x {
 
         self.read_sequence(
             bus,
-            Scd4xCommand::Scd4xCmdGetAutomaticSelfCalibrationEnabled,
+            Scd4xCommand::GetAutomaticSelfCalibrationEnabled,
             &mut enabled_bytes,
             1,
         )
@@ -453,14 +453,9 @@ impl Scd4x {
         debug!("Calling scd4x.get_data_ready_status()");
         let mut ready_bytes: [u8; 2] = [0; 2];
 
-        self.read_sequence(
-            bus,
-            Scd4xCommand::Scd4xCmdGetDataReadyStatus,
-            &mut ready_bytes,
-            1,
-        )
-        .await
-        .unwrap();
+        self.read_sequence(bus, Scd4xCommand::GetDataReadyStatus, &mut ready_bytes, 1)
+            .await
+            .unwrap();
 
         let ready = (u16::from_be_bytes(ready_bytes) & 0xFFF) > 0; // If bits 11:0 are non-zero, data is waiting
         debug!("Ready: {}", ready);
@@ -481,7 +476,7 @@ impl Scd4x {
 
         self.read_sequence(
             bus,
-            Scd4xCommand::Scd4xCmdGetSerialNumber,
+            Scd4xCommand::GetSerialNumber,
             &mut serial_number_bytes[..6], // Only pass 6 bytes for a 48-bit serial number
             1,
         )
@@ -507,7 +502,7 @@ impl Scd4x {
 
         self.read_sequence(
             bus,
-            Scd4xCommand::Scd4xCmdPerformSelfTest,
+            Scd4xCommand::PerformSelfTest,
             &mut test_result_bytes[..6], // Only pass 6 bytes for a 48-bit serial number
             10000,
         )
@@ -540,7 +535,7 @@ impl Scd4x {
 
         self.write_payload(
             bus,
-            Scd4xCommand::Scd4xCmdSetTemperatureOffset,
+            Scd4xCommand::SetTemperatureOffset,
             &offset.to_be_bytes(),
             1,
         )
@@ -560,7 +555,7 @@ impl Scd4x {
 
         self.write_payload(
             bus,
-            Scd4xCommand::Scd4xCmdSetSensorAltitude,
+            Scd4xCommand::SetSensorAltitude,
             &altitude.to_be_bytes(),
             1,
         )
@@ -576,7 +571,7 @@ impl Scd4x {
 
         self.write_payload(
             bus,
-            Scd4xCommand::Scd4xCmdSetAmbientPressure,
+            Scd4xCommand::SetAmbientPressure,
             &pressure_pa.to_be_bytes(),
             1,
         )
@@ -594,11 +589,11 @@ impl Scd4x {
             return Err(Scd4xError::CommandDuringMeasurementError);
         }
 
-        let data: u16 = if *enabled { 1 } else { 0 };
+        let data: u16 = u16::from(*enabled);
 
         self.write_payload(
             bus,
-            Scd4xCommand::Scd4xCmdSetAutomaticSelfCalibrationEnabled,
+            Scd4xCommand::SetAutomaticSelfCalibrationEnabled,
             &data.to_be_bytes(),
             1,
         )

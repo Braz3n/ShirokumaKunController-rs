@@ -1,14 +1,15 @@
 use cyw43::JoinOptions;
 use cyw43_pio::PioSpi;
-use defmt::*;
+use defmt::{debug, error, info, panic, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, IpAddress, IpEndpoint, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
+use embassy_rp::watchdog::Watchdog;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Ticker, Timer};
@@ -20,7 +21,7 @@ use rand::{RngCore, SeedableRng, rngs::StdRng};
 use rustls_pemfile::Item;
 use static_cell::StaticCell;
 
-use mqttrs::*;
+use mqttrs::{Packet, QoS, QosPid, SubscribeTopic, decode_slice};
 
 use crate::ir_tx;
 
@@ -42,6 +43,9 @@ const BROKER_PASS: Option<&[u8]> = Some(include_bytes!("../../secrets/broker_pas
 const BROKER_CLIENT_ID: &str = "Pico";
 
 const TCP_KEEP_ALIVE_SEC: u16 = 60 * 10; // ten minutes
+const TCP_KEEP_ALIVE_OFFSET_SEC: u16 = TCP_KEEP_ALIVE_SEC >> 4; // A little bit of wiggle room before the error triggers
+const WATCHDOG_TIMEOUT_SEC: u16 = 10; // ten seconds (can't be greater than ~16.78s)
+const WATCHDOG_TIMEOUT_OFFSET_SEC: u16 = WATCHDOG_TIMEOUT_SEC >> 2; // A little bit of wiggle room before the error triggers
 
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
@@ -62,6 +66,7 @@ pub async fn wifi_task(
     wifi_spi: PioSpi<'static, PIO0, 0, DMA_CH0>,
     aircon_channel: &'static Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1>,
     tls_seed: [u8; 32],
+    watchdog: &'static mut Watchdog,
 ) {
     let stack = setup_network_stack(spawner, pwr, wifi_spi).await;
     debug!("Network stack is up!");
@@ -102,7 +107,7 @@ pub async fn wifi_task(
         .unwrap();
     info!("Subscribed to topics");
 
-    wifi_loop(&mut tls, aircon_channel).await; // This should never return
+    wifi_loop(&mut tls, aircon_channel, watchdog).await; // This should never return
 }
 
 async fn setup_network_stack(
@@ -140,19 +145,16 @@ async fn setup_network_stack(
 
     unwrap!(spawner.spawn(net_task(runner)));
 
-    loop {
-        match control.join(WIFI_SSID, JoinOptions::new(WIFI_PASS)).await {
-            Ok(_) => break,
-            Err(err) => {
-                error!("Failed to join network with status={}", err.status);
-                loop {}
-            }
+    match control.join(WIFI_SSID, JoinOptions::new(WIFI_PASS)).await {
+        Ok(()) => {}
+        Err(err) => {
+            self::panic!("Failed to join network with status={}", err.status);
         }
     }
 
     info!("Joined network!");
     while !stack.is_config_up() {
-        Timer::after_millis(100).await
+        Timer::after_millis(100).await;
     }
     info!("wait_config_up!");
     stack.wait_config_up().await;
@@ -162,7 +164,7 @@ async fn setup_network_stack(
 
 async fn resolve_ip_addr(stack: &embassy_net::Stack<'_>, url: &str) -> IpAddress {
     let ip_vec = stack.dns_query(url, DnsQueryType::A).await.unwrap();
-    ip_vec.first().unwrap().clone()
+    *ip_vec.first().unwrap()
 }
 
 async fn open_tcp_socket<'buffer>(
@@ -177,9 +179,9 @@ async fn open_tcp_socket<'buffer>(
         .await
         .unwrap();
 
-    socket.set_timeout(Some(Duration::from_secs(
-        (TCP_KEEP_ALIVE_SEC as f32 * 1.2) as u64,
-    )));
+    socket.set_timeout(Some(Duration::from_secs(u64::from(
+        TCP_KEEP_ALIVE_SEC + TCP_KEEP_ALIVE_OFFSET_SEC,
+    ))));
 
     socket
 }
@@ -222,7 +224,7 @@ async fn open_tls_connection<'buffer>(
     tls
 }
 
-async fn handle_aircon_temp(aircon_state: &mut ir_tx::AirconState, arg: &str) {
+fn handle_aircon_temp(aircon_state: &mut ir_tx::AirconState, arg: &str) {
     //
     let target_temp = arg.parse::<u8>().unwrap();
     debug!("Received aircon temp {:?}", target_temp);
@@ -230,7 +232,7 @@ async fn handle_aircon_temp(aircon_state: &mut ir_tx::AirconState, arg: &str) {
     aircon_state.target_temp = target_temp;
 }
 
-async fn handle_aircon_mode(aircon_state: &mut ir_tx::AirconState, arg: &str) {
+fn handle_aircon_mode(aircon_state: &mut ir_tx::AirconState, arg: &str) {
     //
     let mode = match arg {
         "OFF" => ir_tx::ir_cmd_gen::AirconMode::Off,
@@ -247,7 +249,7 @@ async fn handle_aircon_mode(aircon_state: &mut ir_tx::AirconState, arg: &str) {
     aircon_state.mode = mode;
 }
 
-async fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &str) {
+fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &str) {
     //
     let speed = match arg {
         "1" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed0,
@@ -269,9 +271,15 @@ async fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &st
 async fn wifi_loop(
     tls: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     aircon_channel: &'static Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1>,
+    watchdog: &'static mut Watchdog,
 ) -> ! {
     let mut keep_alive_ticker = Ticker::every(Duration::from_secs(u64::from(
-        TCP_KEEP_ALIVE_SEC - (f32::from(TCP_KEEP_ALIVE_SEC) * 0.2) as u16,
+        TCP_KEEP_ALIVE_SEC - TCP_KEEP_ALIVE_OFFSET_SEC,
+    )));
+
+    watchdog.start(Duration::from_secs(u64::from(WATCHDOG_TIMEOUT_SEC)));
+    let mut watchdog_ticker = Ticker::every(Duration::from_secs(u64::from(
+        WATCHDOG_TIMEOUT_SEC - WATCHDOG_TIMEOUT_OFFSET_SEC,
     )));
 
     let mut aircon_state = ir_tx::AirconState {
@@ -285,15 +293,22 @@ async fn wifi_loop(
 
     let mut tls_read_buffer = [0; 4096];
     loop {
+        watchdog.feed();
         // Here we're handling both reception of messages, and maintenance of the keepalive
-        match select(keep_alive_ticker.next(), tls.read(&mut tls_read_buffer)).await {
-            Either::First(_) => {
+        match select3(
+            keep_alive_ticker.next(),
+            tls.read(&mut tls_read_buffer),
+            watchdog_ticker.next(),
+        )
+        .await
+        {
+            Either3::First(()) => {
                 // Keep alive
                 mqtt::mqtt_pingreq(tls).await;
             }
-            Either::Second(_) => {
+            Either3::Second(_) => {
                 // Handle any other kind of incoming packet
-                match decode_slice(&mut tls_read_buffer) {
+                match decode_slice(&tls_read_buffer) {
                     Ok(Some(Packet::Pingresp)) => {
                         // Ping response
                         debug!("Received a pingresp!");
@@ -304,7 +319,7 @@ async fn wifi_loop(
 
                         // Convert u8 slice into String
                         let mut payload_vec = Vec::<u8, 100>::new();
-                        payload_vec.extend_from_slice(&packet.payload).unwrap();
+                        payload_vec.extend_from_slice(packet.payload).unwrap();
                         let payload_string: String<100> = String::from_utf8(payload_vec).unwrap();
                         debug!(
                             "Received packet from topic {:?} with payload {:?}",
@@ -315,13 +330,13 @@ async fn wifi_loop(
                         // let payload_vec: Vec<&str, 2> = payload_string.split(' ').collect();
                         match packet.topic_name {
                             TOPIC_AIRCON_TEMP => {
-                                handle_aircon_temp(&mut aircon_state, &payload_string).await
+                                handle_aircon_temp(&mut aircon_state, &payload_string);
                             }
                             TOPIC_AIRCON_MODE => {
-                                handle_aircon_mode(&mut aircon_state, &payload_string).await
+                                handle_aircon_mode(&mut aircon_state, &payload_string);
                             }
                             TOPIC_AIRCON_FAN_SPEED => {
-                                handle_aircon_fan_speed(&mut aircon_state, &payload_string).await
+                                handle_aircon_fan_speed(&mut aircon_state, &payload_string);
                             }
                             _ => {
                                 warn!("Unexpected payload string! {:?}", payload_string);
@@ -340,7 +355,7 @@ async fn wifi_loop(
                             QosPid::ExactlyOnce(_pid) => {
                                 // We either get QoS 0, which requires no response, or QoS 2, which
                                 // we don't currently support
-                                warn!("Unsupported QoS level!")
+                                warn!("Unsupported QoS level!");
                             }
                         }
 
@@ -356,6 +371,9 @@ async fn wifi_loop(
                         // Unhandled packet types
                     }
                 }
+            }
+            Either3::Third(()) => {
+                watchdog.feed();
             }
         }
     }

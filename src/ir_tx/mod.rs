@@ -24,7 +24,7 @@ impl IrLed {
     // pub async fn ir_init(slice0: PWM_SLICE0, pin16: PIN_16) -> Self {
     pub fn ir_init(pwm: embassy_rp::pwm::Pwm<'static>) -> Self {
         Self {
-            pwm: pwm,
+            pwm,
             duty_cycle_percent: 30,
         }
     }
