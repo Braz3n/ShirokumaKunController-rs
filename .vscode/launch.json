@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "preLaunchTask": "${defaultBuildTask}",
+            "type": "probe-rs-debug",
+            "request": "launch",
+            "name": "Exec probe_rs",
+            "flashingConfig": {
+                "flashingEnabled": true,
+            },
+            "chip": "RP235x",
+            "coreConfigs": [
+                {
+                    "rttEnabled": true,
+                    "programBinary": "target/thumbv8m.main-none-eabihf/debug/aircon-rs"
+                }
+            ]
+        },
+        {
+            "type": "probe-rs-debug",
+            "request": "attach",
+            "name": "Attach probe_rs",
+            "chip": "RP235x",
+            "coreConfigs": [
+                {
+                    "rttEnabled": true,
+                    "programBinary": "target/thumbv8m.main-none-eabihf/debug/aircon-rs"
+                }
+            ]
+        }
+    ]
+}
