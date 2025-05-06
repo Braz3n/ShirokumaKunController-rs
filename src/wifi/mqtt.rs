@@ -42,7 +42,9 @@ pub(super) async fn mqtt_connect(
     });
     let mut tcp_read_buffer = [0; 4];
     let len = encode_slice(&pkt, mqtt_buffer).unwrap();
-    write_with_flush(socket, &mqtt_buffer[..len]).await;
+    write_with_flush(socket, &mqtt_buffer[..len])
+        .await
+        .expect("Failed to send MQTT send message");
 
     // Receive the connack packet
     loop {
@@ -83,7 +85,9 @@ pub(super) async fn mqtt_subscribe(
     let pkt = Packet::Subscribe(Subscribe { pid, topics });
 
     let len = encode_slice(&pkt, mqtt_buffer).unwrap();
-    write_with_flush(socket, &mqtt_buffer[..len]).await;
+    write_with_flush(socket, &mqtt_buffer[..len])
+        .await
+        .expect("Failed to send MQTT subscribe message");
 
     let mut tcp_read_buffer = [0; 64];
     loop {
@@ -110,24 +114,26 @@ pub(super) async fn mqtt_subscribe(
     }
 }
 
-pub(super) async fn mqtt_pingreq(socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>) {
+pub(super) async fn mqtt_pingreq(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+) -> Result<(), MqttError> {
     // We simply cast this out into the void. Reception is handled elsewhere for now.
     let mut pingreq_buf = [0u8; 2];
     let _ = encode_slice(&Packet::Pingreq, &mut pingreq_buf).unwrap();
 
-    write_with_flush(socket, &pingreq_buf).await;
+    write_with_flush(socket, &pingreq_buf).await
 }
 
 pub(super) async fn mqtt_puback(
     socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     pid: Pid,
-) {
+) -> Result<(), MqttError> {
     // We simply cast this out into the void. Reception is handled elsewhere for now.
     let mut puback_buf = [0u8; 4];
     let _ = encode_slice(&Packet::Puback(pid), &mut puback_buf).unwrap();
     debug!("Puback buffer contents: {:?}", puback_buf);
 
-    write_with_flush(socket, &puback_buf).await;
+    write_with_flush(socket, &puback_buf).await
 }
 
 pub(super) async fn mqtt_publish(
@@ -135,7 +141,7 @@ pub(super) async fn mqtt_publish(
     topic: &str,
     retain: bool,
     payload: &str,
-) {
+) -> Result<(), MqttError> {
     let mut publish_buf = [0u8; 256];
     let len = encode_slice(
         &Packet::Publish(Publish {
@@ -149,13 +155,19 @@ pub(super) async fn mqtt_publish(
     )
     .unwrap();
 
-    write_with_flush(socket, &publish_buf[..len]).await;
+    write_with_flush(socket, &publish_buf[..len]).await
 }
 
 async fn write_with_flush(
     socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     buf: &[u8],
-) {
+) -> Result<(), MqttError> {
     socket.write(buf).await.expect("Error writing TLS data");
-    socket.flush().await.expect("Error flushing TLS data");
+    match socket.flush().await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            error!("Failed to flush TCP socket: {:?}", err);
+            Err(MqttError::SocketWrite)
+        }
+    }
 }

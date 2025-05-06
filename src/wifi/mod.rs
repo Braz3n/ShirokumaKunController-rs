@@ -17,6 +17,7 @@ use embedded_tls::{
     Aes256GcmSha384, Certificate, TlsConfig, TlsConnection, TlsContext, UnsecureProvider,
 };
 use heapless::{String, Vec};
+use mqtt::MqttError;
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use rustls_pemfile::Item;
 use static_cell::StaticCell;
@@ -76,38 +77,41 @@ pub async fn wifi_task(
 
     let mut tcp_rx_buffer = [0; 4096];
     let mut tcp_tx_buffer = [0; 4096];
-    let socket = open_tcp_socket(&stack, broker_ip, &mut tcp_tx_buffer, &mut tcp_rx_buffer).await;
-    info!("Opened TCP socket");
-
     let mut tls_rx_buffer = [0; 16640];
     let mut tls_tx_buffer = [0; 16640];
-    let mut tls =
-        open_tls_connection(socket, tls_seed, &mut tls_tx_buffer, &mut tls_rx_buffer).await;
+    loop {
+        let socket =
+            open_tcp_socket(&stack, broker_ip, &mut tcp_tx_buffer, &mut tcp_rx_buffer).await;
+        info!("Opened TCP socket");
 
-    info!("Opened TLS");
+        let mut tls =
+            open_tls_connection(socket, tls_seed, &mut tls_tx_buffer, &mut tls_rx_buffer).await;
 
-    let mut mqtt_buf = [0u8; 1024];
-    mqtt::mqtt_connect(&mut tls, &mut mqtt_buf, &TCP_KEEP_ALIVE_SEC)
-        .await
-        .unwrap();
-    info!("Connected to MQTT broker");
+        info!("Opened TLS");
 
-    let mut subscribe_topics = Vec::<SubscribeTopic, 5>::new();
-    let topics = [TOPIC_AIRCON_TEMP, TOPIC_AIRCON_MODE, TOPIC_AIRCON_FAN_SPEED];
-    for topic in topics {
-        let x = SubscribeTopic {
-            topic_path: String::try_from(topic).unwrap(),
-            qos: QoS::AtLeastOnce,
-        };
-        subscribe_topics.push(x).unwrap();
+        let mut mqtt_buf = [0u8; 1024];
+        mqtt::mqtt_connect(&mut tls, &mut mqtt_buf, &TCP_KEEP_ALIVE_SEC)
+            .await
+            .unwrap();
+        info!("Connected to MQTT broker");
+
+        let mut subscribe_topics = Vec::<SubscribeTopic, 5>::new();
+        let topics = [TOPIC_AIRCON_TEMP, TOPIC_AIRCON_MODE, TOPIC_AIRCON_FAN_SPEED];
+        for topic in topics {
+            let x = SubscribeTopic {
+                topic_path: String::try_from(topic).unwrap(),
+                qos: QoS::AtLeastOnce,
+            };
+            subscribe_topics.push(x).unwrap();
+        }
+
+        mqtt::mqtt_subscribe(&mut tls, &mut mqtt_buf, subscribe_topics)
+            .await
+            .unwrap();
+        info!("Subscribed to topics");
+
+        wifi_loop(&mut tls, aircon_channel, watchdog).await; // This should only return on a connection error
     }
-
-    mqtt::mqtt_subscribe(&mut tls, &mut mqtt_buf, subscribe_topics)
-        .await
-        .unwrap();
-    info!("Subscribed to topics");
-
-    wifi_loop(&mut tls, aircon_channel, watchdog).await; // This should never return
 }
 
 async fn setup_network_stack(
@@ -271,8 +275,8 @@ fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &str) {
 async fn wifi_loop(
     tls: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     aircon_channel: &'static Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1>,
-    watchdog: &'static mut Watchdog,
-) -> ! {
+    watchdog: &mut Watchdog,
+) -> MqttError {
     let mut keep_alive_ticker = Ticker::every(Duration::from_secs(u64::from(
         TCP_KEEP_ALIVE_SEC - TCP_KEEP_ALIVE_OFFSET_SEC,
     )));
@@ -293,7 +297,6 @@ async fn wifi_loop(
 
     let mut tls_read_buffer = [0; 4096];
     loop {
-        watchdog.feed();
         // Here we're handling both reception of messages, and maintenance of the keepalive
         match select3(
             keep_alive_ticker.next(),
@@ -304,7 +307,13 @@ async fn wifi_loop(
         {
             Either3::First(()) => {
                 // Keep alive
-                mqtt::mqtt_pingreq(tls).await;
+                match mqtt::mqtt_pingreq(tls).await {
+                    Ok(()) => (),
+                    Err(err) => {
+                        error!("Failed pingreq");
+                        return err;
+                    }
+                }
             }
             Either3::Second(_) => {
                 // Handle any other kind of incoming packet
@@ -350,7 +359,13 @@ async fn wifi_loop(
                             }
                             QosPid::AtLeastOnce(pid) => {
                                 debug!("Expecting at least one response");
-                                mqtt::mqtt_puback(tls, pid).await;
+                                match mqtt::mqtt_puback(tls, pid).await {
+                                    Ok(()) => (),
+                                    Err(err) => {
+                                        error!("Failed puback");
+                                        return err;
+                                    }
+                                }
                             }
                             QosPid::ExactlyOnce(_pid) => {
                                 // We either get QoS 0, which requires no response, or QoS 2, which

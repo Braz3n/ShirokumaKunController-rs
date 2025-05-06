@@ -6,7 +6,6 @@ use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
 use defmt::{error, info, unwrap};
 use embassy_executor::Spawner;
 
-use embassy_rp::clocks::*;
 use embassy_rp::gpio;
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::Async;
