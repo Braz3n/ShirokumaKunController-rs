@@ -22,3 +22,7 @@ Messages for each of the topics consists of a single ascii word as described bel
 - `aircon/temp`: Set aircon temperature (Degrees Celsius)
 - `aircon/mode`: Set the aircon mode (`OFF`, `HEAT`, `COOL`, `FAN`)
 - `aircon/fan_speed`: Set the aircon fan speed (`1`, `2`, `3`, `4`, `5`, `AUTO`)
+
+## VS Code Dependencies
+- `rust-analyzer`
+- `Debugger for probe-rs`
