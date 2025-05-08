@@ -111,6 +111,17 @@ pub async fn wifi_task(
         info!("Subscribed to topics");
 
         wifi_loop(&mut tls, aircon_channel, watchdog).await; // This should only return on a connection error
+
+        // Close the TLS connection and socket in the case of an error
+        // If we forget to do this, the system locks up do to an overabundance of tls tasks
+        let mut socket = match tls.close().await {
+            Ok(socket) => socket,
+            Err((socket, err)) => {
+                error!("TLS close failed {:?}", err);
+                socket
+            }
+        };
+        socket.close();
     }
 }
 
