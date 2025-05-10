@@ -142,7 +142,7 @@ pub(super) async fn mqtt_publish(
     retain: bool,
     payload: &str,
 ) -> Result<(), MqttError> {
-    let mut publish_buf = [0u8; 256];
+    let mut publish_buf = [0u8; 1024];
     let len = encode_slice(
         &Packet::Publish(Publish {
             dup: false,

@@ -139,7 +139,7 @@ impl Scd4x {
         payload[..2].clone_from_slice(&(command as u16).to_be_bytes());
         payload[2..4].clone_from_slice(data);
 
-        payload[4] = self.calculate_checksum(payload[..2].try_into().unwrap());
+        payload[4] = Self::calculate_checksum(payload[..2].try_into().unwrap());
         _ = bus.write_async(self.address, payload).await;
 
         if delay_ms > 0 {
@@ -157,7 +157,7 @@ impl Scd4x {
             let end_idx = block * 3 + 2;
             let expected_checksum = data[block * 3 + 2];
             let calculated_checksum =
-                self.calculate_checksum(data[start_idx..end_idx].try_into().unwrap());
+                Self::calculate_checksum(data[start_idx..end_idx].try_into().unwrap());
             if calculated_checksum != expected_checksum {
                 return Err(Scd4xError::ChecksumError);
             }
@@ -166,7 +166,7 @@ impl Scd4x {
         Ok(())
     }
 
-    fn calculate_checksum(&self, data: &[u8; 2]) -> u8 {
+    fn calculate_checksum(data: &[u8; 2]) -> u8 {
         // For input 0xBEEF.to_be_bytes(), we expect 0x92
         // let input: u16 = 0xBEEF;
         // let crc = scd40.checksum(&(input.to_be_bytes()));

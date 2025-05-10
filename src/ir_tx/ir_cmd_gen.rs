@@ -52,7 +52,7 @@ pub fn populate_command_buffer(
     raw_data_buffer[4] = update_type as u8; // Update Type
     raw_data_buffer[5] = temperature << 2; // Temperature
     raw_data_buffer[6] = 0x00; // Constant
-    raw_data_buffer[7] = ((timer_off_duration & 0xF) << 4) as u8; // Byte7[7:4] Timer Off Minutes low nibble
+    raw_data_buffer[7] = u8::try_from((timer_off_duration & 0xF) << 4).unwrap(); // Byte7[7:4] Timer Off Minutes low nibble
     raw_data_buffer[8] = ((timer_off_duration >> 4) & 0xFF) as u8; // Byte8[7:0] Timer Off Minutes high byte
     raw_data_buffer[9] = (timer_on_duration & 0xFF) as u8; // Byte9[7:0] Timer On Minutes low byte
     raw_data_buffer[10] = ((timer_on_duration >> 8) & 0xF) as u8; // Byte10[3:0] Timer On Minutes high nibble

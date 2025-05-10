@@ -31,6 +31,8 @@ mod mqtt;
 const TOPIC_AIRCON_TEMP: &str = "aircon/temp";
 const TOPIC_AIRCON_MODE: &str = "aircon/mode";
 const TOPIC_AIRCON_FAN_SPEED: &str = "aircon/fan_speed";
+const TOPIC_AIRCON_REQUEST: &str = "aircon/request";
+const TOPIC_AIRCON_INFO: &str = "aircon/info";
 
 static CA: &[u8] = include_bytes!("../../secrets/root_ca.pem");
 
@@ -96,7 +98,12 @@ pub async fn wifi_task(
         info!("Connected to MQTT broker");
 
         let mut subscribe_topics = Vec::<SubscribeTopic, 5>::new();
-        let topics = [TOPIC_AIRCON_TEMP, TOPIC_AIRCON_MODE, TOPIC_AIRCON_FAN_SPEED];
+        let topics = [
+            TOPIC_AIRCON_TEMP,
+            TOPIC_AIRCON_MODE,
+            TOPIC_AIRCON_FAN_SPEED,
+            TOPIC_AIRCON_REQUEST,
+        ];
         for topic in topics {
             let x = SubscribeTopic {
                 topic_path: String::try_from(topic).unwrap(),
@@ -239,16 +246,26 @@ async fn open_tls_connection<'buffer>(
     tls
 }
 
-fn handle_aircon_temp(aircon_state: &mut ir_tx::AirconState, arg: &str) {
-    //
+async fn handle_aircon_temp(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    qospid: QosPid,
+    aircon_state: &mut ir_tx::AirconState,
+    arg: &str,
+) -> Result<(), MqttError> {
     let target_temp = arg.parse::<u8>().unwrap();
     debug!("Received aircon temp {:?}", target_temp);
 
     aircon_state.target_temp = target_temp;
+
+    send_ack(socket, qospid).await
 }
 
-fn handle_aircon_mode(aircon_state: &mut ir_tx::AirconState, arg: &str) {
-    //
+async fn handle_aircon_mode(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    qospid: QosPid,
+    aircon_state: &mut ir_tx::AirconState,
+    arg: &str,
+) -> Result<(), MqttError> {
     let mode = match arg {
         "OFF" => ir_tx::ir_cmd_gen::AirconMode::Off,
         "HEAT" => ir_tx::ir_cmd_gen::AirconMode::Heating,
@@ -262,10 +279,16 @@ fn handle_aircon_mode(aircon_state: &mut ir_tx::AirconState, arg: &str) {
 
     debug!("Received aircon mode {:?}", mode as u8);
     aircon_state.mode = mode;
+
+    send_ack(socket, qospid).await
 }
 
-fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &str) {
-    //
+async fn handle_aircon_fan_speed(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    qospid: QosPid,
+    aircon_state: &mut ir_tx::AirconState,
+    arg: &str,
+) -> Result<(), MqttError> {
     let speed = match arg {
         "1" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed0,
         "2" => ir_tx::ir_cmd_gen::AirconFanSpeed::Speed1,
@@ -281,6 +304,62 @@ fn handle_aircon_fan_speed(aircon_state: &mut ir_tx::AirconState, arg: &str) {
 
     debug!("Received aircon fan speed {:?}", speed as u8);
     aircon_state.fan_speed = speed;
+
+    send_ack(socket, qospid).await
+}
+
+async fn handle_get_state(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    qospid: QosPid,
+    aircon_state: &mut ir_tx::AirconState,
+) -> Result<(), MqttError> {
+    let mut state_buffer = [0u8; 1024]; // 
+    let state_string =
+        match format_no_std::show(&mut state_buffer, format_args!("{aircon_state:#?}")) {
+            Ok(result) => result,
+            Err(_err) => "Failed to create state string. Is the buffer too short?",
+        };
+    send_ack(socket, qospid).await.unwrap();
+
+    debug!("Sending state buffer: {:?}", state_string);
+    mqtt::mqtt_publish(socket, TOPIC_AIRCON_INFO, true, state_string).await
+}
+
+async fn handle_get_help(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    qospid: QosPid,
+) -> Result<(), MqttError> {
+    let state_string = "Messages for each of the topics consists of a single ascii word as described below \
+                                        - `aircon/temp`: Set aircon temperature (Degrees Celsius) \
+                                        - `aircon/mode`: Set the aircon mode (`OFF`, `HEAT`, `COOL`, `FAN`) \
+                                        - `aircon/fan_speed`: Set the aircon fan speed (`1`, `2`, `3`, `4`, `5`, `AUTO`) \
+                                        - `aircon/info: Either \"state\" for status info or \"help\" for this message";
+    send_ack(socket, qospid).await.unwrap();
+
+    debug!("Sending help string");
+    mqtt::mqtt_publish(socket, TOPIC_AIRCON_INFO, true, state_string).await
+}
+
+async fn send_ack(
+    socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
+    qospid: QosPid,
+) -> Result<(), MqttError> {
+    match qospid {
+        QosPid::AtMostOnce => {
+            // No ack necessary. Do nothing.
+            Ok(())
+        }
+        QosPid::AtLeastOnce(pid) => {
+            debug!("Expecting at least one response");
+            mqtt::mqtt_puback(socket, pid).await
+        }
+        QosPid::ExactlyOnce(_pid) => {
+            // We either get QoS 0, which requires no response, or QoS 2, which
+            // we don't currently support
+            warn!("Unsupported QoS level!");
+            Ok(())
+        }
+    }
 }
 
 async fn wifi_loop(
@@ -338,54 +417,63 @@ async fn wifi_loop(
                         // Handle packet from user device
 
                         // Convert u8 slice into String
-                        let mut payload_vec = Vec::<u8, 100>::new();
+                        let mut payload_vec = Vec::<u8, 1024>::new();
                         payload_vec.extend_from_slice(packet.payload).unwrap();
-                        let payload_string: String<100> = String::from_utf8(payload_vec).unwrap();
+                        let payload_string: String<1024> = String::from_utf8(payload_vec).unwrap();
                         debug!(
                             "Received packet from topic {:?} with payload {:?}",
                             packet.topic_name, payload_string
                         );
 
-                        // Convert String into iterator
-                        // let payload_vec: Vec<&str, 2> = payload_string.split(' ').collect();
-                        match packet.topic_name {
-                            TOPIC_AIRCON_TEMP => {
-                                handle_aircon_temp(&mut aircon_state, &payload_string);
-                            }
-                            TOPIC_AIRCON_MODE => {
-                                handle_aircon_mode(&mut aircon_state, &payload_string);
-                            }
-                            TOPIC_AIRCON_FAN_SPEED => {
-                                handle_aircon_fan_speed(&mut aircon_state, &payload_string);
-                            }
+                        let (tx_result, update_aircon) = match packet.topic_name {
+                            TOPIC_AIRCON_TEMP => (
+                                handle_aircon_temp(
+                                    tls,
+                                    packet.qospid,
+                                    &mut aircon_state,
+                                    &payload_string,
+                                )
+                                .await,
+                                true,
+                            ),
+                            TOPIC_AIRCON_MODE => (
+                                handle_aircon_mode(
+                                    tls,
+                                    packet.qospid,
+                                    &mut aircon_state,
+                                    &payload_string,
+                                )
+                                .await,
+                                true,
+                            ),
+                            TOPIC_AIRCON_FAN_SPEED => (
+                                handle_aircon_fan_speed(
+                                    tls,
+                                    packet.qospid,
+                                    &mut aircon_state,
+                                    &payload_string,
+                                )
+                                .await,
+                                true,
+                            ),
+                            TOPIC_AIRCON_REQUEST => match payload_string.to_lowercase().as_str() {
+                                "state" => (
+                                    handle_get_state(tls, packet.qospid, &mut aircon_state).await,
+                                    false,
+                                ),
+                                _ => (handle_get_help(tls, packet.qospid).await, false),
+                            },
                             _ => {
                                 warn!("Unexpected payload string! {:?}", payload_string);
-                                continue;
+                                (Ok(()), false)
                             }
-                        }
+                        };
 
-                        match packet.qospid {
-                            QosPid::AtMostOnce => {
-                                // No ack necessary. Do nothing.
-                            }
-                            QosPid::AtLeastOnce(pid) => {
-                                debug!("Expecting at least one response");
-                                match mqtt::mqtt_puback(tls, pid).await {
-                                    Ok(()) => (),
-                                    Err(err) => {
-                                        error!("Failed puback");
-                                        return err;
-                                    }
-                                }
-                            }
-                            QosPid::ExactlyOnce(_pid) => {
-                                // We either get QoS 0, which requires no response, or QoS 2, which
-                                // we don't currently support
-                                warn!("Unsupported QoS level!");
-                            }
+                        if tx_result.is_ok() && update_aircon {
+                            aircon_channel.send(aircon_state).await;
+                        } else if tx_result.is_err() {
+                            break tx_result.expect_err("Somehow got okay in error path");
                         }
-
-                        aircon_channel.send(aircon_state).await;
                     }
                     Ok(None) => {
                         debug!("Insufficient data to decode MQTT message");

@@ -38,6 +38,8 @@ heapless = { version = "0.8.0"}
 mqttrs = { version = "0.4", default-features = false, git = "https://github.com/00imvj00/mqttrs.git" }
 embedded-tls = { default-features = false, git = "https://github.com/drogue-iot/embedded-tls", features = ["defmt"] }
 
+format_no_std = "1.2.0"
+
 [profile.release]
 debug = 2
 lto = true
