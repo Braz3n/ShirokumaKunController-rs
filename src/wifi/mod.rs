@@ -31,7 +31,7 @@ mod mqtt;
 const TOPIC_AIRCON_TEMP: &str = "aircon/temp";
 const TOPIC_AIRCON_MODE: &str = "aircon/mode";
 const TOPIC_AIRCON_FAN_SPEED: &str = "aircon/fan_speed";
-const TOPIC_AIRCON_REQUEST: &str = "aircon/request";
+const TOPIC_AIRCON_GET: &str = "aircon/get";
 const TOPIC_AIRCON_INFO: &str = "aircon/info";
 
 static CA: &[u8] = include_bytes!("../../secrets/root_ca.pem");
@@ -102,7 +102,7 @@ pub async fn wifi_task(
             TOPIC_AIRCON_TEMP,
             TOPIC_AIRCON_MODE,
             TOPIC_AIRCON_FAN_SPEED,
-            TOPIC_AIRCON_REQUEST,
+            TOPIC_AIRCON_GET,
         ];
         for topic in topics {
             let x = SubscribeTopic {
@@ -329,11 +329,11 @@ async fn handle_get_help(
     socket: &mut TlsConnection<'_, TcpSocket<'_>, Aes256GcmSha384>,
     qospid: QosPid,
 ) -> Result<(), MqttError> {
-    let state_string = "Messages for each of the topics consists of a single ascii word as described below \
-                                        - `aircon/temp`: Set aircon temperature (Degrees Celsius) \
-                                        - `aircon/mode`: Set the aircon mode (`OFF`, `HEAT`, `COOL`, `FAN`) \
-                                        - `aircon/fan_speed`: Set the aircon fan speed (`1`, `2`, `3`, `4`, `5`, `AUTO`) \
-                                        - `aircon/info: Either \"state\" for status info or \"help\" for this message";
+    let state_string = "Messages for each of the topics consists of a single ascii word as described below\n \
+                                        - `aircon/temp`: Set aircon temperature (Degrees Celsius)\n \
+                                        - `aircon/mode`: Set the aircon mode (`OFF`, `HEAT`, `COOL`, `FAN`)\n \
+                                        - `aircon/fan_speed`: Set the aircon fan speed (`1`, `2`, `3`, `4`, `5`, `AUTO`)\n \
+                                        - `aircon/get: Either \"state\" for status info or \"help\" for this message";
     send_ack(socket, qospid).await.unwrap();
 
     debug!("Sending help string");
@@ -456,7 +456,7 @@ async fn wifi_loop(
                                 .await,
                                 true,
                             ),
-                            TOPIC_AIRCON_REQUEST => match payload_string.to_lowercase().as_str() {
+                            TOPIC_AIRCON_GET => match payload_string.to_lowercase().as_str() {
                                 "state" => (
                                     handle_get_state(tls, packet.qospid, &mut aircon_state).await,
                                     false,

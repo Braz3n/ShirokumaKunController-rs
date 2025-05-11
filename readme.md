@@ -22,6 +22,8 @@ Messages for each of the topics consists of a single ascii word as described bel
 - `aircon/temp`: Set aircon temperature (Degrees Celsius)
 - `aircon/mode`: Set the aircon mode (`OFF`, `HEAT`, `COOL`, `FAN`)
 - `aircon/fan_speed`: Set the aircon fan speed (`1`, `2`, `3`, `4`, `5`, `AUTO`)
+- `aircon/get`: Get the current state of the aircon with `STATE`, or a list of commands with `HELP`
+- `aircon/info`: A send-only channel with the results of messages to `aircon/get`
 
 ## VS Code Dependencies
 - `rust-analyzer`
