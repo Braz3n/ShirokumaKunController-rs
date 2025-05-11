@@ -72,10 +72,10 @@ pub async fn wifi_task(
     watchdog: &'static mut Watchdog,
 ) {
     let stack = setup_network_stack(spawner, pwr, wifi_spi).await;
-    debug!("Network stack is up!");
+    info!("Network stack is up!");
 
     let broker_ip = resolve_ip_addr(&stack, BROKER_URL).await;
-    debug!("Broker IP is {:?}", broker_ip);
+    info!("Broker IP is {:?}", broker_ip);
 
     let mut tcp_rx_buffer = [0; 4096];
     let mut tcp_tx_buffer = [0; 4096];
@@ -89,7 +89,7 @@ pub async fn wifi_task(
         let mut tls =
             open_tls_connection(socket, tls_seed, &mut tls_tx_buffer, &mut tls_rx_buffer).await;
 
-        info!("Opened TLS");
+        info!("Opened TLS connection");
 
         let mut mqtt_buf = [0u8; 1024];
         mqtt::mqtt_connect(&mut tls, &mut mqtt_buf, &TCP_KEEP_ALIVE_SEC)
@@ -253,7 +253,7 @@ async fn handle_aircon_temp(
     arg: &str,
 ) -> Result<(), MqttError> {
     let target_temp = arg.parse::<u8>().unwrap();
-    debug!("Received aircon temp {:?}", target_temp);
+    info!("Received aircon temp {:?}", target_temp);
 
     aircon_state.target_temp = target_temp;
 
@@ -277,7 +277,7 @@ async fn handle_aircon_mode(
         }
     };
 
-    debug!("Received aircon mode {:?}", mode as u8);
+    info!("Received aircon mode {:?}", mode as u8);
     aircon_state.mode = mode;
 
     send_ack(socket, qospid).await
@@ -302,7 +302,7 @@ async fn handle_aircon_fan_speed(
         }
     };
 
-    debug!("Received aircon fan speed {:?}", speed as u8);
+    info!("Received aircon fan speed {:?}", speed as u8);
     aircon_state.fan_speed = speed;
 
     send_ack(socket, qospid).await
@@ -321,7 +321,7 @@ async fn handle_get_state(
         };
     send_ack(socket, qospid).await.unwrap();
 
-    debug!("Sending state buffer: {:?}", state_string);
+    info!("Sending state buffer: {:?}", state_string);
     mqtt::mqtt_publish(socket, TOPIC_AIRCON_INFO, true, state_string).await
 }
 
@@ -336,7 +336,7 @@ async fn handle_get_help(
                                         - `aircon/get: Either \"state\" for status info or \"help\" for this message";
     send_ack(socket, qospid).await.unwrap();
 
-    debug!("Sending help string");
+    info!("Sending help string");
     mqtt::mqtt_publish(socket, TOPIC_AIRCON_INFO, true, state_string).await
 }
 
@@ -347,16 +347,17 @@ async fn send_ack(
     match qospid {
         QosPid::AtMostOnce => {
             // No ack necessary. Do nothing.
+            debug!("QoS Level 0: No puback required");
             Ok(())
         }
         QosPid::AtLeastOnce(pid) => {
-            debug!("Expecting at least one response");
+            debug!("QoS Level 1: Server expects a puback");
             mqtt::mqtt_puback(socket, pid).await
         }
         QosPid::ExactlyOnce(_pid) => {
             // We either get QoS 0, which requires no response, or QoS 2, which
             // we don't currently support
-            warn!("Unsupported QoS level!");
+            warn!("Unsupported QoS level! Skipping handling.");
             Ok(())
         }
     }
