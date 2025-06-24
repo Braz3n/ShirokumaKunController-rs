@@ -47,8 +47,8 @@ const BROKER_CLIENT_ID: &str = "Pico";
 
 const TCP_KEEP_ALIVE_SEC: u16 = 60 * 10; // ten minutes
 const TCP_KEEP_ALIVE_OFFSET_SEC: u16 = TCP_KEEP_ALIVE_SEC >> 4; // A little bit of wiggle room before the error triggers
-const WATCHDOG_TIMEOUT_SEC: u16 = 10; // ten seconds (can't be greater than ~16.78s)
-const WATCHDOG_TIMEOUT_OFFSET_SEC: u16 = WATCHDOG_TIMEOUT_SEC >> 2; // A little bit of wiggle room before the error triggers
+const WATCHDOG_TIMEOUT_SEC: u16 = 16; // ten seconds (can't be greater than ~16.78s)
+const WATCHDOG_TIMEOUT_OFFSET_SEC: u16 = WATCHDOG_TIMEOUT_SEC >> 1; // A little bit of wiggle room before the error triggers
 
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {

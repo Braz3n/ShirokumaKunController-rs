@@ -2,7 +2,7 @@
 #![no_main]
 
 use cortex_m::prelude::_embedded_hal_blocking_delay_DelayMs;
-use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
+use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::{error, info, unwrap};
 use embassy_executor::Spawner;
 
@@ -14,13 +14,14 @@ use embassy_rp::peripherals::TRNG;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0};
 use embassy_rp::pio::InterruptHandler as pioInterruptHander;
 use embassy_rp::trng::Trng;
-use embassy_rp::{pio, pwm};
+use embassy_rp::{pio, pwm, uart};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use ir_tx::IrLed;
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
+// use {defmt_rtt as _, panic_probe as _};
+use {defmt_serial as _, panic_probe as _};
 
 mod ir_tx;
 mod scd4x;
@@ -34,6 +35,9 @@ static HEAP: Heap = Heap::empty();
 static PWM_CLOCK_FREQUENCY: u64 = 125_000_000_000;
 static IR_SIGNAL_FREQUENCY: u64 = 38_000_000;
 static IR_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1> = Channel::new();
+
+static SERIAL: StaticCell<uart::Uart<'_, embassy_rp::peripherals::UART0, uart::Blocking>> =
+    StaticCell::new();
 
 embassy_rp::bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2cInterruptHandler<embassy_rp::peripherals::I2C0>;
@@ -51,6 +55,12 @@ async fn main(spawner: Spawner) {
     }
 
     let p = embassy_rp::init(Default::default());
+
+    // Initialize UART
+    let config = uart::Config::default();
+    let uart: uart::Uart<'_, embassy_rp::peripherals::UART0, uart::Blocking> =
+        uart::Uart::new_blocking(p.UART0, p.PIN_0, p.PIN_1, config);
+    defmt_serial::defmt_serial(SERIAL.init(uart));
 
     // Initialize watchdog
     static WATCHDOG: StaticCell<embassy_rp::watchdog::Watchdog> = StaticCell::new();
@@ -70,7 +80,7 @@ async fn main(spawner: Spawner) {
     let wifi_spi: PioSpi<'_, PIO0, 0, DMA_CH0> = PioSpi::new(
         &mut wifi_pio.common,
         wifi_pio.sm0,
-        DEFAULT_CLOCK_DIVIDER,
+        RM2_CLOCK_DIVIDER, // DEFAULT_CLOCK_DIVIDER,  // Prevents len inv mismatch warnings
         wifi_pio.irq0,
         wifi_cs,
         p.PIN_24,

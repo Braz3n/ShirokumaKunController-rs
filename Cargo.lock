@@ -68,6 +68,7 @@ dependencies = [
  "cyw43-pio",
  "defmt 0.3.100",
  "defmt-rtt",
+ "defmt-serial",
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
@@ -486,6 +487,17 @@ checksum = "c6eca0aae8aa2cf8333200ecbd236274697bc0a394765c858b3d9372eb1abcfa"
 dependencies = [
  "critical-section",
  "defmt 0.3.100",
+]
+
+[[package]]
+name = "defmt-serial"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f58b953e44512ad9e2a5cbd0924d975619e84d017e7f77eb0c94955f73d19813"
+dependencies = [
+ "critical-section",
+ "defmt 0.3.100",
+ "embedded-io",
 ]
 
 [[package]]
