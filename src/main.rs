@@ -3,9 +3,14 @@
 
 use cortex_m::prelude::_embedded_hal_blocking_delay_DelayMs;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use defmt::{error, info, unwrap};
+use defmt::{error, info, unwrap, warn};
 use embassy_executor::Spawner;
 
+use embassy_rp::Peri;
+use embassy_rp::adc;
+use embassy_rp::adc::Channel as adcChannel;
+use embassy_rp::adc::InterruptHandler as adcInterruptHandler;
+use embassy_rp::adc::{Adc, Config};
 use embassy_rp::gpio;
 use embassy_rp::gpio::Output;
 use embassy_rp::i2c::Async;
@@ -20,13 +25,16 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use ir_tx::IrLed;
 use static_cell::StaticCell;
-// use {defmt_rtt as _, panic_probe as _};
-use {defmt_serial as _, panic_probe as _};
+use {defmt_rtt as _, panic_probe as _};
+// use {defmt_serial as _, panic_probe as _};
+
+use micromath::F32Ext;
 
 mod ir_tx;
 mod scd4x;
 mod wifi;
 
+use core::f32;
 use core::ptr::addr_of_mut;
 use embedded_alloc::LlffHeap as Heap;
 #[global_allocator]
@@ -36,13 +44,13 @@ static PWM_CLOCK_FREQUENCY: u64 = 125_000_000_000;
 static IR_SIGNAL_FREQUENCY: u64 = 38_000_000;
 static IR_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1> = Channel::new();
 
-static SERIAL: StaticCell<uart::Uart<'_, embassy_rp::peripherals::UART0, uart::Blocking>> =
-    StaticCell::new();
+static SERIAL: StaticCell<uart::Uart<'_, uart::Blocking>> = StaticCell::new();
 
 embassy_rp::bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2cInterruptHandler<embassy_rp::peripherals::I2C0>;
     PIO0_IRQ_0 => pioInterruptHander<PIO0>;
     TRNG_IRQ => embassy_rp::trng::InterruptHandler<TRNG>;
+    ADC_IRQ_FIFO => adcInterruptHandler;
 });
 
 #[embassy_executor::main]
@@ -57,10 +65,17 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     // Initialize UART
-    let config = uart::Config::default();
-    let uart: uart::Uart<'_, embassy_rp::peripherals::UART0, uart::Blocking> =
-        uart::Uart::new_blocking(p.UART0, p.PIN_0, p.PIN_1, config);
-    defmt_serial::defmt_serial(SERIAL.init(uart));
+    // let config = uart::Config::default();
+    // let uart: uart::Uart<'_, uart::Blocking> =
+    //     uart::Uart::new_blocking(p.UART0, p.PIN_0, p.PIN_1, config);
+    // defmt_serial::defmt_serial(SERIAL.init(uart));
+
+    // // Initialize ADC
+    // let adc = Adc::new(p.ADC, Irqs, Config::default());
+    // let adc_dma = p.DMA_CH1;
+    // let adc_pin = adcChannel::new_pin(p.PIN_26, gpio::Pull::None);
+    // info!("Configured ADC");
+    // unwrap!(spawner.spawn(adc_task(adc, adc_dma, adc_pin)));
 
     // Initialize watchdog
     static WATCHDOG: StaticCell<embassy_rp::watchdog::Watchdog> = StaticCell::new();
@@ -120,6 +135,59 @@ async fn main(spawner: Spawner) {
 }
 
 #[embassy_executor::task(pool_size = 1)]
+async fn adc_task(
+    // adc: &'static mut embassy_rp::adc::Adc<'static, adc::Async>,
+    mut adc: embassy_rp::adc::Adc<'static, adc::Async>,
+    mut dma_channel: Peri<'static, embassy_rp::peripherals::DMA_CH1>,
+    mut adc_pin: adcChannel<'static>,
+) {
+    const FFT_SIZE: usize = 4096;
+    const ADC_FREQUENCY: u32 = 48_000_000; // 48MHz
+    const MAX_FREQUENCY: u32 = 20_000; // 20kHz
+    const SAMPLE_FREQUENCY: u32 = MAX_FREQUENCY * 2; // 40kHz
+    const TARGET_FREQUENCY: f32 = 2000.0; // 2kHz signal
+    const TARGET_BIN: f32 = TARGET_FREQUENCY / (MAX_FREQUENCY as f32 / (FFT_SIZE / 2) as f32);
+    const TARGET_THRESHOLD: f32 = 12.0; // The threshold for a signal to have been detected. Determined empirically
+    const CLOCK_DIV: u16 = (ADC_FREQUENCY / SAMPLE_FREQUENCY) as u16 - 1;
+    let mut adc_buffer = [0_u16; FFT_SIZE];
+    let mut fft_buffer = [0_f32; FFT_SIZE];
+
+    let mut ticker = Ticker::every(Duration::from_millis(100));
+    loop {
+        adc.read_many(
+            &mut adc_pin,
+            &mut adc_buffer,
+            CLOCK_DIV,
+            dma_channel.reborrow(),
+        )
+        .await
+        .unwrap();
+
+        for (i, element) in adc_buffer.iter().enumerate() {
+            fft_buffer[i] = (*element).into();
+            fft_buffer[i] -= 942.0; // Remove the DC offset (should be 0.67/3.3 * 4096 ~ 381.6) but 942.0 was found to be closer to the truth
+        }
+
+        let spectrum = microfft::real::rfft_4096(&mut fft_buffer);
+        let mut average = 0.0;
+        for (i, element) in spectrum.iter().enumerate() {
+            if i > 1 {
+                // Skip the first bin since the DC offset is known to be suspect, even after attempting
+                // to remove the DC component
+                average += element.norm_sqr().sqrt();
+            }
+        }
+        average /= FFT_SIZE as f32;
+        let target_raw = spectrum[TARGET_BIN.round() as usize].norm_sqr().sqrt();
+        if target_raw / average > TARGET_THRESHOLD {
+            warn!("Detected a signal! {:?}", target_raw / average);
+        }
+
+        ticker.next().await;
+    }
+}
+
+#[embassy_executor::task(pool_size = 1)]
 async fn ir_task(
     ir_pwm: embassy_rp::pwm::Pwm<'static>,
     aircon_channel: &'static Channel<CriticalSectionRawMutex, ir_tx::AirconState, 1>,
@@ -146,6 +214,7 @@ async fn ir_task(
             &mut command_buffer,
         );
 
+        // TODO: Set up a channel to request the ADC check that a pulse went through
         ir_led.send_command_buffer(&mut command_buffer).await;
     }
 }

@@ -7,7 +7,7 @@ resolver = "2"
 
 [dependencies]
 embassy-rp = { version = "0.4.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa", "binary-info"] }
-embassy-sync = { version = "0.6.2", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt"] }
+embassy-sync = { version = "0.6.2", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", git = "https://github.com/embassy-rs/embassy.git", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
 embassy-time = { version = "0.4.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "defmt-timestamp-uptime"] }
 embassy-embedded-hal = { version = "0.3.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt"] }
@@ -40,6 +40,9 @@ mqttrs = { version = "0.4", default-features = false, git = "https://github.com/
 embedded-tls = { default-features = false, git = "https://github.com/drogue-iot/embedded-tls", features = ["defmt"] }
 
 format_no_std = "1.2.0"
+
+microfft = { version = "0.6.0", features = ["size-4096"] }
+micromath = "2.1.0"
 
 [profile.release]
 debug = 2
