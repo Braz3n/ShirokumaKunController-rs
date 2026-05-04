@@ -1,6 +1,8 @@
 # aircon-rs
 Rust implementation for controlling a Hitachi Shirokuma-kun air conditioner over IR.
 
+The Rust support for the Matter ecosystem is still immature, so this project has unforunately been abandoned in favour of the C/C++ equivalent [here](https://github.com/Braz3n/Shirokumakun-Matter).
+
 ## Starting the project from scratch
 ```
 sudo apt install librust-openssl-dev
